@@ -5,7 +5,30 @@
 
 uniffi::setup_scaffolding!();
 
+mod asr;
 mod tts;
+
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+pub enum AsrError {
+    #[error("{0}")]
+    Failed(String),
+}
+
+/// Transcribes 16 kHz mono PCM (signed 16-bit little-endian) with the SenseVoice
+/// model under `model_dir`. Language is auto-detected. Returns the transcript.
+/// Bytes are used over the FFI to avoid boxing tens of thousands of floats.
+#[uniffi::export]
+pub fn asr_recognize(
+    model_dir: String,
+    pcm16le: Vec<u8>,
+    sample_rate: i32,
+) -> Result<String, AsrError> {
+    let samples: Vec<f32> = pcm16le
+        .chunks_exact(2)
+        .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
+        .collect();
+    asr::recognize(&model_dir, &samples, sample_rate).map_err(AsrError::Failed)
+}
 
 /// Result of a TTS synthesis: the written WAV plus basic audio metadata.
 #[derive(uniffi::Record)]

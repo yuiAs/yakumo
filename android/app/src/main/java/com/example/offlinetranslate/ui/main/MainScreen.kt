@@ -1,6 +1,15 @@
 package com.example.offlinetranslate.ui.main
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.LaunchedEffect
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -35,6 +44,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import uniffi.translatecore.asrRecognize
 import uniffi.translatecore.ttsSynthesize
 
 @Composable
@@ -66,6 +76,8 @@ internal fun MainScreen(data: List<String>, modifier: Modifier = Modifier) {
     verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
     data.forEach { Text(text = it) }
+    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+    AsrPanel()
     HorizontalDivider(Modifier.padding(vertical = 8.dp))
     TtsPanel()
   }
@@ -155,6 +167,110 @@ private fun TtsPanel(modifier: Modifier = Modifier) {
   ) { Text(if (busy) "Working…" else "Speak") }
 
   Text(status)
+}
+
+@Composable
+private fun AsrPanel(modifier: Modifier = Modifier) {
+  val context = LocalContext.current
+  val scope = rememberCoroutineScope()
+
+  val modelName = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
+  val externalZip = remember { File(context.getExternalFilesDir(null), "$modelName.zip") }
+  val internalDir = remember { File(context.filesDir, modelName) }
+
+  var hasPermission by remember {
+    mutableStateOf(
+      ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+        PackageManager.PERMISSION_GRANTED
+    )
+  }
+  val permissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+      hasPermission = granted
+    }
+  LaunchedEffect(Unit) {
+    if (!hasPermission) permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+  }
+
+  var transcript by remember { mutableStateOf("") }
+  var status by remember {
+    mutableStateOf(
+      when {
+        internalDir.exists() -> "Model ready (internal)."
+        externalZip.exists() -> "Model zip staged; will extract on first run."
+        else -> "Model zip NOT found at ${externalZip.absolutePath}"
+      }
+    )
+  }
+  var busy by remember { mutableStateOf(false) }
+
+  Text("ASR (SenseVoice) demo", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
+  Text("Records 5s, auto-detects language, transcribes.")
+
+  Button(
+    enabled = !busy,
+    onClick = {
+      if (!hasPermission) {
+        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        return@Button
+      }
+      busy = true
+      transcript = ""
+      status = "Recording 5s…"
+      scope.launch {
+        try {
+          val text = withContext(Dispatchers.IO) {
+            val pcm = recordPcm16(durationMs = 5000)
+            status = "Transcribing…"
+            if (!internalDir.exists()) unzipTo(externalZip, internalDir)
+            asrRecognize(internalDir.absolutePath, pcm, 16000)
+          }
+          transcript = text.ifBlank { "(no speech detected)" }
+          status = "Done."
+        } catch (e: Throwable) {
+          status = "Error: ${e.message}"
+        } finally {
+          busy = false
+        }
+      }
+    },
+  ) { Text(if (busy) "Working…" else "Record & transcribe") }
+
+  Text(status)
+  if (transcript.isNotEmpty()) {
+    Text("Transcript: $transcript", style = androidx.compose.material3.MaterialTheme.typography.bodyLarge)
+  }
+}
+
+// Records mono 16 kHz signed-16-bit PCM from the mic and returns it as bytes.
+private fun recordPcm16(durationMs: Long): ByteArray {
+  val sampleRate = 16000
+  val minBuf = AudioRecord.getMinBufferSize(
+    sampleRate,
+    AudioFormat.CHANNEL_IN_MONO,
+    AudioFormat.ENCODING_PCM_16BIT,
+  )
+  val record = AudioRecord(
+    MediaRecorder.AudioSource.VOICE_RECOGNITION,
+    sampleRate,
+    AudioFormat.CHANNEL_IN_MONO,
+    AudioFormat.ENCODING_PCM_16BIT,
+    maxOf(minBuf, sampleRate * 2),
+  )
+  val out = java.io.ByteArrayOutputStream()
+  val buf = ByteArray(4096)
+  try {
+    record.startRecording()
+    val end = System.currentTimeMillis() + durationMs
+    while (System.currentTimeMillis() < end) {
+      val n = record.read(buf, 0, buf.size)
+      if (n > 0) out.write(buf, 0, n)
+    }
+  } finally {
+    record.stop()
+    record.release()
+  }
+  return out.toByteArray()
 }
 
 // Extracts a zip into destDir, guarding against path traversal.

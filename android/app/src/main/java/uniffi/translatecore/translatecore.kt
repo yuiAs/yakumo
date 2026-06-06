@@ -719,6 +719,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -734,6 +736,8 @@ internal interface UniffiLib : Library {
         
     }
 
+    fun uniffi_translatecore_fn_func_asr_recognize(`modelDir`: RustBuffer.ByValue,`pcm16le`: RustBuffer.ByValue,`sampleRate`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_translatecore_fn_func_core_version(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_translatecore_fn_func_greeting(`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -854,6 +858,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_translatecore_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_translatecore_checksum_func_asr_recognize(
+    ): Short
     fun uniffi_translatecore_checksum_func_core_version(
     ): Short
     fun uniffi_translatecore_checksum_func_greeting(
@@ -879,6 +885,9 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
+    if (lib.uniffi_translatecore_checksum_func_asr_recognize() != 40419.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_translatecore_checksum_func_core_version() != 32937.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1041,6 +1050,25 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     }
 }
 
+/**
+ * @suppress
+ */
+public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
+    override fun read(buf: ByteBuffer): ByteArray {
+        val len = buf.getInt()
+        val byteArr = ByteArray(len)
+        buf.get(byteArr)
+        return byteArr
+    }
+    override fun allocationSize(value: ByteArray): ULong {
+        return 4UL + value.size.toULong()
+    }
+    override fun write(value: ByteArray, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        buf.put(value)
+    }
+}
+
 
 
 /**
@@ -1078,6 +1106,65 @@ public object FfiConverterTypeTtsResult: FfiConverterRustBuffer<TtsResult> {
             FfiConverterInt.write(value.`numSamples`, buf)
             FfiConverterString.write(value.`wavPath`, buf)
     }
+}
+
+
+
+
+
+sealed class AsrException: kotlin.Exception() {
+    
+    class Failed(
+        
+        val v1: kotlin.String
+        ) : AsrException() {
+        override val message
+            get() = "v1=${ v1 }"
+    }
+    
+
+    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<AsrException> {
+        override fun lift(error_buf: RustBuffer.ByValue): AsrException = FfiConverterTypeAsrError.lift(error_buf)
+    }
+
+    
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeAsrError : FfiConverterRustBuffer<AsrException> {
+    override fun read(buf: ByteBuffer): AsrException {
+        
+
+        return when(buf.getInt()) {
+            1 -> AsrException.Failed(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: AsrException): ULong {
+        return when(value) {
+            is AsrException.Failed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.v1)
+            )
+        }
+    }
+
+    override fun write(value: AsrException, buf: ByteBuffer) {
+        when(value) {
+            is AsrException.Failed -> {
+                buf.putInt(1)
+                FfiConverterString.write(value.v1, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+
 }
 
 
@@ -1138,6 +1225,21 @@ public object FfiConverterTypeTtsError : FfiConverterRustBuffer<TtsException> {
     }
 
 }
+        /**
+         * Transcribes 16 kHz mono PCM (signed 16-bit little-endian) with the SenseVoice
+         * model under `model_dir`. Language is auto-detected. Returns the transcript.
+         * Bytes are used over the FFI to avoid boxing tens of thousands of floats.
+         */
+    @Throws(AsrException::class) fun `asrRecognize`(`modelDir`: kotlin.String, `pcm16le`: kotlin.ByteArray, `sampleRate`: kotlin.Int): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(AsrException) { _status ->
+    UniffiLib.INSTANCE.uniffi_translatecore_fn_func_asr_recognize(
+        FfiConverterString.lower(`modelDir`),FfiConverterByteArray.lower(`pcm16le`),FfiConverterInt.lower(`sampleRate`),_status)
+}
+    )
+    }
+    
+
         /**
          * Version banner for the native core. Used by the PoC to confirm the app is
          * actually executing Rust rather than a Kotlin stub.
