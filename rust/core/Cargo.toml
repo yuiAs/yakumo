@@ -1,0 +1,20 @@
+[package]
+name = "translatecore"
+version = "0.1.0"
+edition = "2021"
+description = "Native translation pipeline core (VAD/ASR/MT/TTS orchestration). PoC stage."
+
+[lib]
+name = "translatecore"
+# cdylib: loaded by the Android app via JNA. staticlib kept for future iOS/desktop linking.
+crate-type = ["cdylib", "staticlib"]
+
+# uniffi-bindgen binary lives in this crate so bindings are generated from the
+# exact same uniffi version the library was built with (avoids version drift).
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+
+[dependencies]
+uniffi = { version = "0.28", features = ["cli"] }
+thiserror = "1"
