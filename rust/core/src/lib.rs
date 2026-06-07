@@ -6,7 +6,20 @@
 uniffi::setup_scaffolding!();
 
 mod asr;
+mod translate;
 mod tts;
+
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+pub enum TranslateError {
+    #[error("{0}")]
+    Failed(String),
+}
+
+/// Step A smoke: load onnxruntime via `ort` and open an ONNX model on device.
+#[uniffi::export]
+pub fn translate_smoke(ort_dylib: String, model_path: String) -> Result<String, TranslateError> {
+    translate::smoke(&ort_dylib, &model_path).map_err(TranslateError::Failed)
+}
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum AsrError {

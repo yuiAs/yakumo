@@ -45,6 +45,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import uniffi.translatecore.asrRecognize
+import uniffi.translatecore.translateSmoke
 import uniffi.translatecore.ttsSynthesize
 
 @Composable
@@ -79,8 +80,49 @@ internal fun MainScreen(data: List<String>, modifier: Modifier = Modifier) {
     HorizontalDivider(Modifier.padding(vertical = 8.dp))
     AsrPanel()
     HorizontalDivider(Modifier.padding(vertical = 8.dp))
+    TranslatePanel()
+    HorizontalDivider(Modifier.padding(vertical = 8.dp))
     TtsPanel()
   }
+}
+
+@Composable
+private fun TranslatePanel(modifier: Modifier = Modifier) {
+  val context = LocalContext.current
+  val scope = rememberCoroutineScope()
+  val externalZip = remember { File(context.getExternalFilesDir(null), "nllb.zip") }
+  val internalDir = remember { File(context.filesDir, "nllb") }
+  // onnxruntime is already loaded into the process (translatecore.so -> sherpa ->
+  // onnxruntime). Passing the soname lets ort dlopen the already-resident lib,
+  // which works even with extractNativeLibs=false (libs mmap'd from the APK).
+  val ortDylib = "libonnxruntime.so"
+  var status by remember {
+    mutableStateOf(if (internalDir.exists() || externalZip.exists()) "Model staged." else "No nllb.zip.")
+  }
+  var busy by remember { mutableStateOf(false) }
+
+  Text("Translation runtime smoke (Step A)", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
+  Button(
+    enabled = !busy,
+    onClick = {
+      busy = true
+      status = "Loading ORT + NLLB encoder…"
+      scope.launch {
+        try {
+          val r = withContext(Dispatchers.IO) {
+            if (!internalDir.exists()) unzipTo(externalZip, internalDir)
+            translateSmoke(ortDylib, File(internalDir, "encoder_model_quantized.onnx").absolutePath)
+          }
+          status = "OK: $r"
+        } catch (e: Throwable) {
+          status = "Error: ${e.message}"
+        } finally {
+          busy = false
+        }
+      }
+    },
+  ) { Text(if (busy) "Working…" else "Run ORT smoke") }
+  Text(status)
 }
 
 // Speeds applied at playback time (decoupled from synthesis), per the design.

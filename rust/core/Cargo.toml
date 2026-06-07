@@ -18,3 +18,6 @@ path = "uniffi-bindgen.rs"
 [dependencies]
 uniffi = { version = "0.28", features = ["cli"] }
 thiserror = "1"
+# Translation runtime: load-dynamic dlopens the existing libonnxruntime.so at
+# runtime (onnxruntime 1.24, matching the sherpa-bundled lib) — no link/build.
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["load-dynamic"] }
