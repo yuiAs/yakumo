@@ -24,6 +24,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -78,11 +79,109 @@ internal fun MainScreen(data: List<String>, modifier: Modifier = Modifier) {
   ) {
     data.forEach { Text(text = it) }
     HorizontalDivider(Modifier.padding(vertical = 8.dp))
+    SessionPanel()
+    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+    Text("— individual debug panels —", style = androidx.compose.material3.MaterialTheme.typography.labelSmall)
     AsrPanel()
     HorizontalDivider(Modifier.padding(vertical = 8.dp))
     TranslatePanel()
     HorizontalDivider(Modifier.padding(vertical = 8.dp))
     TtsPanel()
+  }
+}
+
+private data class Utterance(
+  val transcript: String,
+  val srcLang: String,
+  val translation: String,
+  val tgtLang: String,
+)
+
+// FLORES code chosen by a cheap script heuristic (kana/kanji -> Japanese source).
+private fun isJapanese(text: String): Boolean =
+  text.any { it in '぀'..'ヿ' || it in '一'..'鿿' }
+
+// End-to-end debug flow: record -> ASR (Transcript) -> NLLB (Translate) -> show both.
+@Composable
+private fun SessionPanel(modifier: Modifier = Modifier) {
+  val context = LocalContext.current
+  val scope = rememberCoroutineScope()
+
+  val asrName = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
+  val asrZip = remember { File(context.getExternalFilesDir(null), "$asrName.zip") }
+  val asrDir = remember { File(context.filesDir, asrName) }
+  val nllbZip = remember { File(context.getExternalFilesDir(null), "nllb.zip") }
+  val nllbDir = remember { File(context.filesDir, "nllb") }
+  val ortDylib = "libonnxruntime.so"
+
+  var hasPermission by remember {
+    mutableStateOf(
+      ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+        PackageManager.PERMISSION_GRANTED
+    )
+  }
+  val permissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasPermission = it }
+
+  val log = remember { mutableStateListOf<Utterance>() }
+  var status by remember { mutableStateOf("Ready. (record EN or JA — direction auto)") }
+  var busy by remember { mutableStateOf(false) }
+
+  Text("Session — record → transcript → translate", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
+
+  Button(
+    enabled = !busy,
+    onClick = {
+      if (!hasPermission) {
+        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        return@Button
+      }
+      busy = true
+      status = "Recording 5s…"
+      scope.launch {
+        try {
+          val u = withContext(Dispatchers.IO) {
+            val pcm = recordPcm16(5000)
+            status = "Transcribing…"
+            if (!asrDir.exists()) unzipTo(asrZip, asrDir)
+            val transcript = asrRecognize(asrDir.absolutePath, pcm, 16000)
+            val ja = isJapanese(transcript)
+            val src = if (ja) "jpn_Jpan" else "eng_Latn"
+            val tgt = if (ja) "eng_Latn" else "jpn_Jpan"
+            status = "Translating $src → $tgt…"
+            if (!nllbDir.exists()) unzipTo(nllbZip, nllbDir)
+            val translation = translateText(nllbDir.absolutePath, transcript, src, tgt, ortDylib)
+            Utterance(transcript, src, translation, tgt)
+          }
+          log.add(0, u)
+          status = "Done. (${log.size} utterance${if (log.size == 1) "" else "s"})"
+        } catch (e: Throwable) {
+          status = "Error: ${e.message}"
+        } finally {
+          busy = false
+        }
+      }
+    },
+  ) { Text(if (busy) "Working…" else "Record & translate") }
+
+  Text(status)
+
+  // Transcript / Translate 併記ログ(新しい発話が上)
+  log.forEach { u ->
+    Column(
+      Modifier.fillMaxWidth().padding(vertical = 4.dp),
+      verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+      Text(
+        "Transcript [${u.srcLang}]: ${u.transcript}",
+        style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+      )
+      Text(
+        "Translate  [${u.tgtLang}]: ${u.translation}",
+        style = androidx.compose.material3.MaterialTheme.typography.bodyLarge,
+      )
+      HorizontalDivider(Modifier.padding(top = 4.dp))
+    }
   }
 }
 
