@@ -1,0 +1,144 @@
+package com.example.offlinetranslate.data
+
+import android.content.Context
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+
+@Serializable
+data class ModelManifest(val models: List<ModelSpec>)
+
+@Serializable
+data class ModelSpec(
+  val id: String,
+  val dir: String,
+  val checkFile: String,
+  val files: List<FileSpec> = emptyList(),
+  val archive: ArchiveSpec? = null,
+)
+
+@Serializable data class FileSpec(val name: String, val url: String)
+
+@Serializable data class ArchiveSpec(val url: String, val format: String)
+
+/**
+ * First-run model provisioning: reads assets/models.json and downloads each
+ * model into internal storage (filesDir). Replaces the old adb-push workflow.
+ * Internal storage is required because the NDK's raw open() is denied on
+ * external Android/data on some OEMs (see docs/architecture.md §12).
+ */
+object Models {
+  private val json = Json { ignoreUnknownKeys = true }
+
+  fun manifest(context: Context): ModelManifest {
+    val text = context.assets.open("models.json").bufferedReader().use { it.readText() }
+    return json.decodeFromString(text)
+  }
+
+  fun spec(context: Context, id: String): ModelSpec =
+    manifest(context).models.first { it.id == id }
+
+  fun dir(context: Context, id: String): File =
+    File(context.filesDir, spec(context, id).dir)
+
+  fun isPresent(context: Context, id: String): Boolean {
+    val s = spec(context, id)
+    return File(File(context.filesDir, s.dir), s.checkFile).exists()
+  }
+
+  /** Downloads/extracts the model if missing. Blocking — call from an IO thread. */
+  fun ensure(context: Context, id: String, onProgress: (String) -> Unit = {}) {
+    val s = spec(context, id)
+    val target = File(File(context.filesDir, s.dir), s.checkFile)
+    if (target.exists()) {
+      onProgress("$id: present")
+      return
+    }
+    val archive = s.archive
+    if (archive != null) {
+      // tar.bz2 contains a top-level folder == s.dir, so extract into filesDir.
+      val tmp = File(context.cacheDir, "$id-archive")
+      onProgress("$id: downloading…")
+      download(archive.url, tmp) { b -> onProgress("$id: ${b / 1_000_000} MB") }
+      onProgress("$id: extracting…")
+      extractTarBz2(tmp, context.filesDir)
+      tmp.delete()
+    } else {
+      val dir = File(context.filesDir, s.dir).apply { mkdirs() }
+      for (f in s.files) {
+        onProgress("$id: ${f.name}…")
+        download(f.url, File(dir, f.name)) { b -> onProgress("$id: ${f.name} ${b / 1_000_000} MB") }
+      }
+    }
+    onProgress("$id: done")
+  }
+
+  // Streaming download that manually follows redirects (HF/GitHub CDN hops).
+  private fun download(urlStr: String, dest: File, onProgress: (Long) -> Unit) {
+    var url = urlStr
+    var hops = 0
+    while (true) {
+      val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+        instanceFollowRedirects = false
+        connectTimeout = 30_000
+        readTimeout = 60_000
+      }
+      val code = conn.responseCode
+      if (code in 300..399) {
+        val loc = conn.getHeaderField("Location") ?: error("redirect without Location")
+        conn.disconnect()
+        url = if (loc.startsWith("http")) loc else URL(URL(url), loc).toString()
+        if (++hops > 8) error("too many redirects")
+        continue
+      }
+      if (code != 200) {
+        conn.disconnect()
+        error("HTTP $code for $url")
+      }
+      val part = File(dest.parentFile, dest.name + ".part")
+      conn.inputStream.use { input ->
+        part.outputStream().use { out ->
+          val buf = ByteArray(1 shl 16)
+          var total = 0L
+          while (true) {
+            val n = input.read(buf)
+            if (n < 0) break
+            out.write(buf, 0, n)
+            total += n
+            onProgress(total)
+          }
+        }
+      }
+      conn.disconnect()
+      if (dest.exists()) dest.delete()
+      check(part.renameTo(dest)) { "rename ${part.name} -> ${dest.name} failed" }
+      return
+    }
+  }
+
+  private fun extractTarBz2(archive: File, destDir: File) {
+    val destRoot = destDir.canonicalFile
+    archive.inputStream().buffered().use { fin ->
+      BZip2CompressorInputStream(fin).use { bz ->
+        TarArchiveInputStream(bz).use { tar ->
+          var entry = tar.nextEntry
+          while (entry != null) {
+            val out = File(destDir, entry.name).canonicalFile
+            require(out.path.startsWith(destRoot.path)) { "tar entry escapes dest: ${entry.name}" }
+            if (entry.isDirectory) {
+              out.mkdirs()
+            } else {
+              out.parentFile?.mkdirs()
+              out.outputStream().use { tar.copyTo(it) }
+            }
+            entry = tar.nextEntry
+          }
+        }
+      }
+    }
+  }
+}

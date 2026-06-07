@@ -40,6 +40,7 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.navigation3.runtime.NavKey
 import com.example.offlinetranslate.data.DefaultDataRepository
+import com.example.offlinetranslate.data.Models
 import com.example.offlinetranslate.theme.OfflineTranslateTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -79,6 +80,8 @@ internal fun MainScreen(data: List<String>, modifier: Modifier = Modifier) {
   ) {
     data.forEach { Text(text = it) }
     HorizontalDivider(Modifier.padding(vertical = 8.dp))
+    SetupPanel()
+    HorizontalDivider(Modifier.padding(vertical = 8.dp))
     SessionPanel()
     HorizontalDivider(Modifier.padding(vertical = 8.dp))
     Text("— individual debug panels —", style = androidx.compose.material3.MaterialTheme.typography.labelSmall)
@@ -107,11 +110,8 @@ private fun SessionPanel(modifier: Modifier = Modifier) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
 
-  val asrName = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
-  val asrZip = remember { File(context.getExternalFilesDir(null), "$asrName.zip") }
-  val asrDir = remember { File(context.filesDir, asrName) }
-  val nllbZip = remember { File(context.getExternalFilesDir(null), "nllb.zip") }
-  val nllbDir = remember { File(context.filesDir, "nllb") }
+  val asrDir = remember { Models.dir(context, "asr") }
+  val nllbDir = remember { Models.dir(context, "nllb") }
   val ortDylib = "libonnxruntime.so"
 
   var hasPermission by remember {
@@ -143,13 +143,13 @@ private fun SessionPanel(modifier: Modifier = Modifier) {
           val u = withContext(Dispatchers.IO) {
             val pcm = recordPcm16(5000)
             status = "Transcribing…"
-            if (!asrDir.exists()) unzipTo(asrZip, asrDir)
+            Models.ensure(context, "asr") { status = it }
             val transcript = asrRecognize(asrDir.absolutePath, pcm, 16000)
             val ja = isJapanese(transcript)
             val src = if (ja) "jpn_Jpan" else "eng_Latn"
             val tgt = if (ja) "eng_Latn" else "jpn_Jpan"
             status = "Translating $src → $tgt…"
-            if (!nllbDir.exists()) unzipTo(nllbZip, nllbDir)
+            Models.ensure(context, "nllb") { status = it }
             val translation = translateText(nllbDir.absolutePath, transcript, src, tgt, ortDylib)
             Utterance(transcript, src, translation, tgt)
           }
@@ -189,8 +189,7 @@ private fun SessionPanel(modifier: Modifier = Modifier) {
 private fun TranslatePanel(modifier: Modifier = Modifier) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
-  val externalZip = remember { File(context.getExternalFilesDir(null), "nllb.zip") }
-  val internalDir = remember { File(context.filesDir, "nllb") }
+  val nllbDir = remember { Models.dir(context, "nllb") }
   // onnxruntime is already loaded into the process (translatecore.so -> sherpa ->
   // onnxruntime). The soname lets ort dlopen the already-resident lib even with
   // extractNativeLibs=false (libs mmap'd from the APK, no on-disk path).
@@ -198,9 +197,7 @@ private fun TranslatePanel(modifier: Modifier = Modifier) {
 
   var text by remember { mutableStateOf("Good morning, everyone. It is such a pleasure to see you all.") }
   var result by remember { mutableStateOf("") }
-  var status by remember {
-    mutableStateOf(if (internalDir.exists() || externalZip.exists()) "Model staged." else "No nllb.zip.")
-  }
+  var status by remember { mutableStateOf("Ready.") }
   var busy by remember { mutableStateOf(false) }
 
   fun run(src: String, tgt: String) {
@@ -210,8 +207,8 @@ private fun TranslatePanel(modifier: Modifier = Modifier) {
     scope.launch {
       try {
         val r = withContext(Dispatchers.IO) {
-          if (!internalDir.exists()) unzipTo(externalZip, internalDir)
-          translateText(internalDir.absolutePath, text, src, tgt, ortDylib)
+          Models.ensure(context, "nllb") { status = it }
+          translateText(nllbDir.absolutePath, text, src, tgt, ortDylib)
         }
         result = r
         status = "Done ($src → $tgt)."
@@ -249,26 +246,12 @@ private fun TtsPanel(modifier: Modifier = Modifier) {
   val scope = rememberCoroutineScope()
   val player = remember { ExoPlayer.Builder(context).build() }
 
-  val modelName = "kokoro-int8-multi-lang-v1_1"
-  // Model is delivered as a zip on external storage (adb push for the PoC; a
-  // network download in production), then extracted to internal storage. The
-  // NDK's raw open() is denied on Android/data on some OEMs, but internal
-  // storage (filesDir) is always native-readable.
-  val externalZip = remember { File(context.getExternalFilesDir(null), "$modelName.zip") }
-  val internalDir = remember { File(context.filesDir, modelName) }
+  val internalDir = remember { Models.dir(context, "tts") }
   val outWav = remember { File(context.cacheDir, "tts.wav") }
 
   var text by remember { mutableStateOf("Hello, this is Kokoro running fully offline on device.") }
   var speed by remember { mutableStateOf(1.0f) }
-  var status by remember {
-    mutableStateOf(
-      when {
-        internalDir.exists() -> "Model ready (internal)."
-        externalZip.exists() -> "Model zip staged; will extract on first run."
-        else -> "Model zip NOT found at ${externalZip.absolutePath}"
-      }
-    )
-  }
+  var status by remember { mutableStateOf("Ready.") }
   var busy by remember { mutableStateOf(false) }
 
   Text("TTS (Kokoro) demo", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
@@ -302,10 +285,7 @@ private fun TtsPanel(modifier: Modifier = Modifier) {
         try {
           // Model load + synthesis are heavy: keep them off the main thread.
           val result = withContext(Dispatchers.IO) {
-            // One-time extract external zip -> internal (NDK can't open Android/data on some OEMs).
-            if (!internalDir.exists()) {
-              unzipTo(externalZip, internalDir)
-            }
+            Models.ensure(context, "tts") { status = it }
             ttsSynthesize(internalDir.absolutePath, text, /* sid = */ 0, /* speed = */ 1.0f, outWav.absolutePath)
           }
           val seconds = result.numSamples.toFloat() / result.sampleRate
@@ -331,9 +311,7 @@ private fun AsrPanel(modifier: Modifier = Modifier) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
 
-  val modelName = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
-  val externalZip = remember { File(context.getExternalFilesDir(null), "$modelName.zip") }
-  val internalDir = remember { File(context.filesDir, modelName) }
+  val internalDir = remember { Models.dir(context, "asr") }
 
   var hasPermission by remember {
     mutableStateOf(
@@ -350,15 +328,7 @@ private fun AsrPanel(modifier: Modifier = Modifier) {
   }
 
   var transcript by remember { mutableStateOf("") }
-  var status by remember {
-    mutableStateOf(
-      when {
-        internalDir.exists() -> "Model ready (internal)."
-        externalZip.exists() -> "Model zip staged; will extract on first run."
-        else -> "Model zip NOT found at ${externalZip.absolutePath}"
-      }
-    )
-  }
+  var status by remember { mutableStateOf("Ready.") }
   var busy by remember { mutableStateOf(false) }
 
   Text("ASR (SenseVoice) demo", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
@@ -379,7 +349,7 @@ private fun AsrPanel(modifier: Modifier = Modifier) {
           val text = withContext(Dispatchers.IO) {
             val pcm = recordPcm16(durationMs = 5000)
             status = "Transcribing…"
-            if (!internalDir.exists()) unzipTo(externalZip, internalDir)
+            Models.ensure(context, "asr") { status = it }
             asrRecognize(internalDir.absolutePath, pcm, 16000)
           }
           transcript = text.ifBlank { "(no speech detected)" }
@@ -430,24 +400,37 @@ private fun recordPcm16(durationMs: Long): ByteArray {
   return out.toByteArray()
 }
 
-// Extracts a zip into destDir, guarding against path traversal.
-private fun unzipTo(zip: File, destDir: File) {
-  destDir.mkdirs()
-  val destRoot = destDir.canonicalFile
-  java.util.zip.ZipInputStream(zip.inputStream().buffered()).use { zin ->
-    var entry = zin.nextEntry
-    while (entry != null) {
-      val target = File(destDir, entry.name).canonicalFile
-      require(target.path.startsWith(destRoot.path)) { "zip entry escapes dest: ${entry.name}" }
-      if (entry.isDirectory) {
-        target.mkdirs()
-      } else {
-        target.parentFile?.mkdirs()
-        target.outputStream().use { zin.copyTo(it) }
-      }
-      entry = zin.nextEntry
-    }
+// First-run setup: download all models defined in assets/models.json.
+@Composable
+private fun SetupPanel(modifier: Modifier = Modifier) {
+  val context = LocalContext.current
+  val scope = rememberCoroutineScope()
+  val ids = remember { Models.manifest(context).models.map { it.id } }
+  var status by remember {
+    mutableStateOf(ids.joinToString("\n") { "$it: ${if (Models.isPresent(context, it)) "ready" else "missing"}" })
   }
+  var busy by remember { mutableStateOf(false) }
+
+  Text("Setup — download models", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
+  Button(
+    enabled = !busy,
+    onClick = {
+      busy = true
+      scope.launch {
+        try {
+          withContext(Dispatchers.IO) {
+            for (id in ids) Models.ensure(context, id) { status = it }
+          }
+          status = ids.joinToString("\n") { "$it: ${if (Models.isPresent(context, it)) "ready" else "missing"}" }
+        } catch (e: Throwable) {
+          status = "Error: ${e.message}"
+        } finally {
+          busy = false
+        }
+      }
+    },
+  ) { Text(if (busy) "Downloading…" else "Download all models") }
+  Text(status)
 }
 
 @Preview(showBackground = true)

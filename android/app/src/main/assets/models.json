@@ -1,0 +1,32 @@
+{
+  "models": [
+    {
+      "id": "asr",
+      "dir": "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17",
+      "checkFile": "model.int8.onnx",
+      "archive": {
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2",
+        "format": "tar.bz2"
+      }
+    },
+    {
+      "id": "tts",
+      "dir": "kokoro-int8-multi-lang-v1_1",
+      "checkFile": "model.int8.onnx",
+      "archive": {
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_1.tar.bz2",
+        "format": "tar.bz2"
+      }
+    },
+    {
+      "id": "nllb",
+      "dir": "nllb",
+      "checkFile": "encoder_model_quantized.onnx",
+      "files": [
+        { "name": "encoder_model_quantized.onnx", "url": "https://huggingface.co/Xenova/nllb-200-distilled-600M/resolve/main/onnx/encoder_model_quantized.onnx" },
+        { "name": "decoder_model_quantized.onnx", "url": "https://huggingface.co/Xenova/nllb-200-distilled-600M/resolve/main/onnx/decoder_model_quantized.onnx" },
+        { "name": "tokenizer.json", "url": "https://huggingface.co/Xenova/nllb-200-distilled-600M/resolve/main/tokenizer.json" }
+      ]
+    }
+  ]
+}
