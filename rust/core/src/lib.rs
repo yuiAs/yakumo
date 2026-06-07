@@ -21,8 +21,17 @@ pub fn translate_smoke(ort_dylib: String, model_path: String) -> Result<String, 
     translate::smoke(&ort_dylib, &model_path).map_err(TranslateError::Failed)
 }
 
+/// Loads the NLLB models under `model_dir` into the resident engine without
+/// translating, so the UI can warm them up once and surface a "loaded" state.
+/// Idempotent: a no-op when the same `model_dir` is already resident.
+#[uniffi::export]
+pub fn translate_load(model_dir: String, ort_dylib: String) -> Result<(), TranslateError> {
+    translate::load(&model_dir, &ort_dylib).map_err(TranslateError::Failed)
+}
+
 /// Translates `text` from `src_lang` to `tgt_lang` (NLLB FLORES codes, e.g.
-/// "eng_Latn", "jpn_Jpan") using the NLLB ONNX models under `model_dir`.
+/// "eng_Latn", "jpn_Jpan") using the NLLB ONNX models under `model_dir`. Loads
+/// the models on first use, then reuses the resident engine.
 #[uniffi::export]
 pub fn translate_text(
     model_dir: String,
@@ -41,9 +50,17 @@ pub enum AsrError {
     Failed(String),
 }
 
+/// Loads the SenseVoice recognizer under `model_dir` into the resident engine
+/// without recognizing anything, to warm it up. Idempotent per `model_dir`.
+#[uniffi::export]
+pub fn asr_load(model_dir: String) -> Result<(), AsrError> {
+    asr::load(&model_dir).map_err(AsrError::Failed)
+}
+
 /// Transcribes 16 kHz mono PCM (signed 16-bit little-endian) with the SenseVoice
 /// model under `model_dir`. Language is auto-detected. Returns the transcript.
 /// Bytes are used over the FFI to avoid boxing tens of thousands of floats.
+/// Loads the recognizer on first use, then reuses the resident engine.
 #[uniffi::export]
 pub fn asr_recognize(
     model_dir: String,
@@ -71,9 +88,16 @@ pub enum TtsError {
     Failed(String),
 }
 
+/// Loads the Kokoro TTS handle under `model_dir` into the resident engine
+/// without synthesizing, to warm it up. Idempotent per `model_dir`.
+#[uniffi::export]
+pub fn tts_load(model_dir: String) -> Result<(), TtsError> {
+    tts::load(&model_dir).map_err(TtsError::Failed)
+}
+
 /// Synthesizes `text` with the Kokoro model under `model_dir`, writing a WAV to
 /// `out_wav`. `speed` is the Kokoro generation rate (playback speed is applied
-/// separately in the UI layer). Proves a real model runs end to end on device.
+/// separately in the UI layer). Loads the model on first use, then reuses it.
 #[uniffi::export]
 pub fn tts_synthesize(
     model_dir: String,

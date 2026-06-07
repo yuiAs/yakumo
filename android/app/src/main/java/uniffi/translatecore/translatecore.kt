@@ -725,6 +725,12 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -740,6 +746,8 @@ internal interface UniffiLib : Library {
         
     }
 
+    fun uniffi_translatecore_fn_func_asr_load(`modelDir`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_translatecore_fn_func_asr_recognize(`modelDir`: RustBuffer.ByValue,`pcm16le`: RustBuffer.ByValue,`sampleRate`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_translatecore_fn_func_core_version(uniffi_out_err: UniffiRustCallStatus, 
@@ -748,10 +756,14 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_translatecore_fn_func_sherpa_version(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_translatecore_fn_func_translate_load(`modelDir`: RustBuffer.ByValue,`ortDylib`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_translatecore_fn_func_translate_smoke(`ortDylib`: RustBuffer.ByValue,`modelPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_translatecore_fn_func_translate_text(`modelDir`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,`srcLang`: RustBuffer.ByValue,`tgtLang`: RustBuffer.ByValue,`ortDylib`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_translatecore_fn_func_tts_load(`modelDir`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_translatecore_fn_func_tts_synthesize(`modelDir`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,`sid`: Int,`speed`: Float,`outWav`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun ffi_translatecore_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -866,6 +878,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_translatecore_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_translatecore_checksum_func_asr_load(
+    ): Short
     fun uniffi_translatecore_checksum_func_asr_recognize(
     ): Short
     fun uniffi_translatecore_checksum_func_core_version(
@@ -874,9 +888,13 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_translatecore_checksum_func_sherpa_version(
     ): Short
+    fun uniffi_translatecore_checksum_func_translate_load(
+    ): Short
     fun uniffi_translatecore_checksum_func_translate_smoke(
     ): Short
     fun uniffi_translatecore_checksum_func_translate_text(
+    ): Short
+    fun uniffi_translatecore_checksum_func_tts_load(
     ): Short
     fun uniffi_translatecore_checksum_func_tts_synthesize(
     ): Short
@@ -897,7 +915,10 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
-    if (lib.uniffi_translatecore_checksum_func_asr_recognize() != 40419.toShort()) {
+    if (lib.uniffi_translatecore_checksum_func_asr_load() != 40231.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_translatecore_checksum_func_asr_recognize() != 19243.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_translatecore_checksum_func_core_version() != 32937.toShort()) {
@@ -909,13 +930,19 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_translatecore_checksum_func_sherpa_version() != 7407.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_translatecore_checksum_func_translate_load() != 977.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_translatecore_checksum_func_translate_smoke() != 47779.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_translatecore_checksum_func_translate_text() != 12726.toShort()) {
+    if (lib.uniffi_translatecore_checksum_func_translate_text() != 13229.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_translatecore_checksum_func_tts_synthesize() != 43265.toShort()) {
+    if (lib.uniffi_translatecore_checksum_func_tts_load() != 46181.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_translatecore_checksum_func_tts_synthesize() != 57710.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1303,9 +1330,23 @@ public object FfiConverterTypeTtsError : FfiConverterRustBuffer<TtsException> {
 
 }
         /**
+         * Loads the SenseVoice recognizer under `model_dir` into the resident engine
+         * without recognizing anything, to warm it up. Idempotent per `model_dir`.
+         */
+    @Throws(AsrException::class) fun `asrLoad`(`modelDir`: kotlin.String)
+        = 
+    uniffiRustCallWithError(AsrException) { _status ->
+    UniffiLib.INSTANCE.uniffi_translatecore_fn_func_asr_load(
+        FfiConverterString.lower(`modelDir`),_status)
+}
+    
+    
+
+        /**
          * Transcribes 16 kHz mono PCM (signed 16-bit little-endian) with the SenseVoice
          * model under `model_dir`. Language is auto-detected. Returns the transcript.
          * Bytes are used over the FFI to avoid boxing tens of thousands of floats.
+         * Loads the recognizer on first use, then reuses the resident engine.
          */
     @Throws(AsrException::class) fun `asrRecognize`(`modelDir`: kotlin.String, `pcm16le`: kotlin.ByteArray, `sampleRate`: kotlin.Int): kotlin.String {
             return FfiConverterString.lift(
@@ -1357,6 +1398,20 @@ public object FfiConverterTypeTtsError : FfiConverterRustBuffer<TtsException> {
     
 
         /**
+         * Loads the NLLB models under `model_dir` into the resident engine without
+         * translating, so the UI can warm them up once and surface a "loaded" state.
+         * Idempotent: a no-op when the same `model_dir` is already resident.
+         */
+    @Throws(TranslateException::class) fun `translateLoad`(`modelDir`: kotlin.String, `ortDylib`: kotlin.String)
+        = 
+    uniffiRustCallWithError(TranslateException) { _status ->
+    UniffiLib.INSTANCE.uniffi_translatecore_fn_func_translate_load(
+        FfiConverterString.lower(`modelDir`),FfiConverterString.lower(`ortDylib`),_status)
+}
+    
+    
+
+        /**
          * Step A smoke: load onnxruntime via `ort` and open an ONNX model on device.
          */
     @Throws(TranslateException::class) fun `translateSmoke`(`ortDylib`: kotlin.String, `modelPath`: kotlin.String): kotlin.String {
@@ -1371,7 +1426,8 @@ public object FfiConverterTypeTtsError : FfiConverterRustBuffer<TtsException> {
 
         /**
          * Translates `text` from `src_lang` to `tgt_lang` (NLLB FLORES codes, e.g.
-         * "eng_Latn", "jpn_Jpan") using the NLLB ONNX models under `model_dir`.
+         * "eng_Latn", "jpn_Jpan") using the NLLB ONNX models under `model_dir`. Loads
+         * the models on first use, then reuses the resident engine.
          */
     @Throws(TranslateException::class) fun `translateText`(`modelDir`: kotlin.String, `text`: kotlin.String, `srcLang`: kotlin.String, `tgtLang`: kotlin.String, `ortDylib`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
@@ -1384,9 +1440,22 @@ public object FfiConverterTypeTtsError : FfiConverterRustBuffer<TtsException> {
     
 
         /**
+         * Loads the Kokoro TTS handle under `model_dir` into the resident engine
+         * without synthesizing, to warm it up. Idempotent per `model_dir`.
+         */
+    @Throws(TtsException::class) fun `ttsLoad`(`modelDir`: kotlin.String)
+        = 
+    uniffiRustCallWithError(TtsException) { _status ->
+    UniffiLib.INSTANCE.uniffi_translatecore_fn_func_tts_load(
+        FfiConverterString.lower(`modelDir`),_status)
+}
+    
+    
+
+        /**
          * Synthesizes `text` with the Kokoro model under `model_dir`, writing a WAV to
          * `out_wav`. `speed` is the Kokoro generation rate (playback speed is applied
-         * separately in the UI layer). Proves a real model runs end to end on device.
+         * separately in the UI layer). Loads the model on first use, then reuses it.
          */
     @Throws(TtsException::class) fun `ttsSynthesize`(`modelDir`: kotlin.String, `text`: kotlin.String, `sid`: kotlin.Int, `speed`: kotlin.Float, `outWav`: kotlin.String): TtsResult {
             return FfiConverterTypeTtsResult.lift(

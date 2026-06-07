@@ -1,5 +1,13 @@
 //! Offline TTS via the sherpa-onnx C API (Kokoro). Android-only; the host build
 //! gets a stub so tests and binding generation still link.
+//!
+//! The Kokoro handle is expensive to build but reusable, so it is kept resident
+//! in a process-global keyed by `model_dir`; each call only generates audio.
+
+#[cfg(target_os = "android")]
+pub fn load(model_dir: &str) -> Result<(), String> {
+    imp::load(model_dir)
+}
 
 #[cfg(target_os = "android")]
 pub fn synthesize(
@@ -10,6 +18,11 @@ pub fn synthesize(
     out_wav: &str,
 ) -> Result<(i32, i32), String> {
     imp::synthesize(model_dir, text, sid, speed, out_wav)
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn load(_model_dir: &str) -> Result<(), String> {
+    Err("TTS is only available on Android (native sherpa-onnx not linked on host)".to_owned())
 }
 
 #[cfg(not(target_os = "android"))]
@@ -28,6 +41,7 @@ mod imp {
     use std::ffi::CString;
     use std::os::raw::{c_char, c_void};
     use std::path::Path;
+    use std::sync::{Mutex, OnceLock};
 
     // --- C struct mirrors. Field order/types must match sherpa-onnx c-api.h exactly. ---
     // Engine sub-configs are embedded by value in TtsModelConfig, so every one must be
@@ -163,13 +177,28 @@ mod imp {
         ) -> i32;
     }
 
-    pub fn synthesize(
-        model_dir: &str,
-        text: &str,
-        sid: i32,
-        speed: f32,
-        out_wav: &str,
-    ) -> Result<(i32, i32), String> {
+    /// Resident Kokoro TTS handle. The sherpa handle is a raw pointer, so it is
+    /// not auto-`Send`; access is serialized through `ENGINE`'s `Mutex`.
+    struct TtsEngine {
+        model_dir: String,
+        tts: *const c_void,
+    }
+
+    unsafe impl Send for TtsEngine {}
+
+    impl Drop for TtsEngine {
+        fn drop(&mut self) {
+            unsafe { SherpaOnnxDestroyOfflineTts(self.tts) };
+        }
+    }
+
+    static ENGINE: OnceLock<Mutex<Option<TtsEngine>>> = OnceLock::new();
+
+    fn engine_cell() -> &'static Mutex<Option<TtsEngine>> {
+        ENGINE.get_or_init(|| Mutex::new(None))
+    }
+
+    fn create_tts(model_dir: &str) -> Result<*const c_void, String> {
         let dir = Path::new(model_dir);
 
         // Preflight: confirm the native side can actually read the key files.
@@ -202,8 +231,6 @@ mod imp {
         ))
         .map_err(|e| e.to_string())?;
         let provider = CString::new("cpu").unwrap();
-        let text_c = CString::new(text).map_err(|e| e.to_string())?;
-        let out_c = CString::new(out_wav).map_err(|e| e.to_string())?;
 
         // Zero-init the whole config (null pointers / 0 floats) then fill Kokoro.
         let mut cfg: TtsConfig = unsafe { std::mem::zeroed() };
@@ -223,20 +250,52 @@ mod imp {
         if tts.is_null() {
             return Err("SherpaOnnxCreateOfflineTts returned null".to_owned());
         }
+        Ok(tts)
+    }
+
+    fn ensure_loaded<'a>(
+        guard: &'a mut Option<TtsEngine>,
+        model_dir: &str,
+    ) -> Result<&'a TtsEngine, String> {
+        let stale = guard.as_ref().map(|e| e.model_dir.as_str()) != Some(model_dir);
+        if stale {
+            let tts = create_tts(model_dir)?;
+            *guard = Some(TtsEngine {
+                model_dir: model_dir.to_owned(),
+                tts,
+            });
+        }
+        Ok(guard.as_ref().expect("engine just loaded"))
+    }
+
+    pub fn load(model_dir: &str) -> Result<(), String> {
+        let mut guard = engine_cell().lock().map_err(|e| e.to_string())?;
+        ensure_loaded(&mut guard, model_dir)?;
+        Ok(())
+    }
+
+    pub fn synthesize(
+        model_dir: &str,
+        text: &str,
+        sid: i32,
+        speed: f32,
+        out_wav: &str,
+    ) -> Result<(i32, i32), String> {
+        let text_c = CString::new(text).map_err(|e| e.to_string())?;
+        let out_c = CString::new(out_wav).map_err(|e| e.to_string())?;
+
+        let mut guard = engine_cell().lock().map_err(|e| e.to_string())?;
+        let tts = ensure_loaded(&mut guard, model_dir)?.tts;
 
         let audio = unsafe { SherpaOnnxOfflineTtsGenerate(tts, text_c.as_ptr(), sid, speed) };
         if audio.is_null() {
-            unsafe { SherpaOnnxDestroyOfflineTts(tts) };
             return Err("SherpaOnnxOfflineTtsGenerate returned null".to_owned());
         }
 
         let (n, sample_rate) = unsafe { ((*audio).n, (*audio).sample_rate) };
         let written = unsafe { SherpaOnnxWriteWave((*audio).samples, n, sample_rate, out_c.as_ptr()) };
 
-        unsafe {
-            SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio);
-            SherpaOnnxDestroyOfflineTts(tts);
-        }
+        unsafe { SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio) };
 
         if written != 1 {
             return Err(format!("SherpaOnnxWriteWave failed (rc={written})"));

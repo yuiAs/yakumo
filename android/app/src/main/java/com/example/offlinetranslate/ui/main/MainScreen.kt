@@ -46,8 +46,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import uniffi.translatecore.asrLoad
 import uniffi.translatecore.asrRecognize
+import uniffi.translatecore.translateLoad
 import uniffi.translatecore.translateText
+import uniffi.translatecore.ttsLoad
 import uniffi.translatecore.ttsSynthesize
 
 @Composable
@@ -406,10 +409,14 @@ private fun SetupPanel(modifier: Modifier = Modifier) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
   val ids = remember { Models.manifest(context).models.map { it.id } }
+  val ortDylib = "libonnxruntime.so"
   var status by remember {
     mutableStateOf(ids.joinToString("\n") { "$it: ${if (Models.isPresent(context, it)) "ready" else "missing"}" })
   }
   var busy by remember { mutableStateOf(false) }
+  // One-time warm-up state: residency means engines load once and stay in RAM.
+  var enginesLoaded by remember { mutableStateOf(false) }
+  var engineStatus by remember { mutableStateOf("engines: not loaded (first use loads them)") }
 
   Text("Setup — download models", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
   Button(
@@ -431,6 +438,38 @@ private fun SetupPanel(modifier: Modifier = Modifier) {
     },
   ) { Text(if (busy) "Downloading…" else "Download all models") }
   Text(status)
+
+  // Warm-up: load ASR / NLLB / TTS into resident engines up front so the first
+  // record/translate/speak doesn't pay the ~850 MB load cost inline.
+  Button(
+    enabled = !busy,
+    onClick = {
+      busy = true
+      engineStatus = "engines: loading…"
+      scope.launch {
+        try {
+          withContext(Dispatchers.IO) {
+            engineStatus = "engines: loading asr…"
+            Models.ensure(context, "asr") { engineStatus = it }
+            asrLoad(Models.dir(context, "asr").absolutePath)
+            engineStatus = "engines: loading nllb…"
+            Models.ensure(context, "nllb") { engineStatus = it }
+            translateLoad(Models.dir(context, "nllb").absolutePath, ortDylib)
+            engineStatus = "engines: loading tts…"
+            Models.ensure(context, "tts") { engineStatus = it }
+            ttsLoad(Models.dir(context, "tts").absolutePath)
+          }
+          enginesLoaded = true
+          engineStatus = "engines: loaded (asr, nllb, tts) — resident"
+        } catch (e: Throwable) {
+          engineStatus = "engines error: ${e.message}"
+        } finally {
+          busy = false
+        }
+      }
+    },
+  ) { Text(if (enginesLoaded) "Reload engines" else "Load engines into memory") }
+  Text(engineStatus)
 }
 
 @Preview(showBackground = true)

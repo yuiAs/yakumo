@@ -1,8 +1,22 @@
 //! Offline ASR via the sherpa-onnx C API (SenseVoice). Android-only; host stub.
+//!
+//! The recognizer is expensive to build but reusable, so it is kept resident in
+//! a process-global keyed by `model_dir`; only the lightweight per-utterance
+//! stream is created on each call.
+
+#[cfg(target_os = "android")]
+pub fn load(model_dir: &str) -> Result<(), String> {
+    imp::load(model_dir)
+}
 
 #[cfg(target_os = "android")]
 pub fn recognize(model_dir: &str, samples: &[f32], sample_rate: i32) -> Result<String, String> {
     imp::recognize(model_dir, samples, sample_rate)
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn load(_model_dir: &str) -> Result<(), String> {
+    Err("ASR is only available on Android (native sherpa-onnx not linked on host)".to_owned())
 }
 
 #[cfg(not(target_os = "android"))]
@@ -16,6 +30,7 @@ mod imp {
     use std::ffi::{CStr, CString};
     use std::os::raw::{c_char, c_void};
     use std::path::Path;
+    use std::sync::{Mutex, OnceLock};
 
     // --- C struct mirrors (sherpa-onnx c-api.h v1.13.2). Order/types must match exactly. ---
 
@@ -221,7 +236,29 @@ mod imp {
         fn SherpaOnnxDestroyOfflineRecognizerResult(r: *const RecognizerResult);
     }
 
-    pub fn recognize(model_dir: &str, samples: &[f32], sample_rate: i32) -> Result<String, String> {
+    /// Resident SenseVoice recognizer. The sherpa handle is a raw pointer, so it
+    /// is not auto-`Send`; access is serialized through `ENGINE`'s `Mutex`, which
+    /// makes single-owner cross-thread use sound.
+    struct AsrEngine {
+        model_dir: String,
+        recognizer: *const c_void,
+    }
+
+    unsafe impl Send for AsrEngine {}
+
+    impl Drop for AsrEngine {
+        fn drop(&mut self) {
+            unsafe { SherpaOnnxDestroyOfflineRecognizer(self.recognizer) };
+        }
+    }
+
+    static ENGINE: OnceLock<Mutex<Option<AsrEngine>>> = OnceLock::new();
+
+    fn engine_cell() -> &'static Mutex<Option<AsrEngine>> {
+        ENGINE.get_or_init(|| Mutex::new(None))
+    }
+
+    fn create_recognizer(model_dir: &str) -> Result<*const c_void, String> {
         let dir = Path::new(model_dir);
         let model_path = dir.join("model.int8.onnx");
         let tokens_path = dir.join("tokens.txt");
@@ -249,43 +286,68 @@ mod imp {
         cfg.model_config.sense_voice.use_itn = 1;
         cfg.decoding_method = decoding.as_ptr();
 
+        // sherpa copies the config strings internally, so the CStrings above can
+        // be dropped once this returns.
         let recognizer = unsafe { SherpaOnnxCreateOfflineRecognizer(&cfg) };
         if recognizer.is_null() {
             return Err("SherpaOnnxCreateOfflineRecognizer returned null".to_owned());
         }
+        Ok(recognizer)
+    }
 
-        let result = (|| {
-            let stream = unsafe { SherpaOnnxCreateOfflineStream(recognizer) };
-            if stream.is_null() {
-                return Err("CreateOfflineStream returned null".to_owned());
-            }
-            unsafe {
-                SherpaOnnxAcceptWaveformOffline(
-                    stream,
-                    sample_rate,
-                    samples.as_ptr(),
-                    samples.len() as i32,
-                );
-                SherpaOnnxDecodeOfflineStream(recognizer, stream);
-            }
-            let res = unsafe { SherpaOnnxGetOfflineStreamResult(stream) };
-            let text = if res.is_null() {
+    fn ensure_loaded<'a>(
+        guard: &'a mut Option<AsrEngine>,
+        model_dir: &str,
+    ) -> Result<&'a AsrEngine, String> {
+        let stale = guard.as_ref().map(|e| e.model_dir.as_str()) != Some(model_dir);
+        if stale {
+            let recognizer = create_recognizer(model_dir)?;
+            *guard = Some(AsrEngine {
+                model_dir: model_dir.to_owned(),
+                recognizer,
+            });
+        }
+        Ok(guard.as_ref().expect("engine just loaded"))
+    }
+
+    pub fn load(model_dir: &str) -> Result<(), String> {
+        let mut guard = engine_cell().lock().map_err(|e| e.to_string())?;
+        ensure_loaded(&mut guard, model_dir)?;
+        Ok(())
+    }
+
+    pub fn recognize(model_dir: &str, samples: &[f32], sample_rate: i32) -> Result<String, String> {
+        let mut guard = engine_cell().lock().map_err(|e| e.to_string())?;
+        let recognizer = ensure_loaded(&mut guard, model_dir)?.recognizer;
+
+        // The recognizer is reused; only the per-utterance stream is transient.
+        let stream = unsafe { SherpaOnnxCreateOfflineStream(recognizer) };
+        if stream.is_null() {
+            return Err("CreateOfflineStream returned null".to_owned());
+        }
+        unsafe {
+            SherpaOnnxAcceptWaveformOffline(
+                stream,
+                sample_rate,
+                samples.as_ptr(),
+                samples.len() as i32,
+            );
+            SherpaOnnxDecodeOfflineStream(recognizer, stream);
+        }
+        let res = unsafe { SherpaOnnxGetOfflineStreamResult(stream) };
+        let text = if res.is_null() {
+            String::new()
+        } else {
+            let t = unsafe { (*res).text };
+            let s = if t.is_null() {
                 String::new()
             } else {
-                let t = unsafe { (*res).text };
-                let s = if t.is_null() {
-                    String::new()
-                } else {
-                    unsafe { CStr::from_ptr(t) }.to_string_lossy().into_owned()
-                };
-                unsafe { SherpaOnnxDestroyOfflineRecognizerResult(res) };
-                s
+                unsafe { CStr::from_ptr(t) }.to_string_lossy().into_owned()
             };
-            unsafe { SherpaOnnxDestroyOfflineStream(stream) };
-            Ok(text)
-        })();
-
-        unsafe { SherpaOnnxDestroyOfflineRecognizer(recognizer) };
-        result
+            unsafe { SherpaOnnxDestroyOfflineRecognizerResult(res) };
+            s
+        };
+        unsafe { SherpaOnnxDestroyOfflineStream(stream) };
+        Ok(text)
     }
 }
