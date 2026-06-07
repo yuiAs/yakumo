@@ -70,6 +70,12 @@ object Models {
     } else {
       val dir = File(context.filesDir, s.dir).apply { mkdirs() }
       for (f in s.files) {
+        // Skip files already on disk so adding one new file (e.g. a swapped
+        // decoder) doesn't re-download the unchanged ones.
+        if (File(dir, f.name).exists()) {
+          onProgress("$id: ${f.name} present")
+          continue
+        }
         onProgress("$id: ${f.name}…")
         download(f.url, File(dir, f.name)) { b -> onProgress("$id: ${f.name} ${b / 1_000_000} MB") }
       }

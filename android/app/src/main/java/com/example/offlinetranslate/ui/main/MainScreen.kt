@@ -209,12 +209,16 @@ private fun TranslatePanel(modifier: Modifier = Modifier) {
     status = "Translating $src → $tgt…"
     scope.launch {
       try {
+        var ms = 0L
         val r = withContext(Dispatchers.IO) {
           Models.ensure(context, "nllb") { status = it }
-          translateText(nllbDir.absolutePath, text, src, tgt, ortDylib)
+          val start = System.nanoTime()
+          val out = translateText(nllbDir.absolutePath, text, src, tgt, ortDylib)
+          ms = (System.nanoTime() - start) / 1_000_000
+          out
         }
         result = r
-        status = "Done ($src → $tgt)."
+        status = "Done ($src → $tgt) in ${ms} ms."
       } catch (e: Throwable) {
         status = "Error: ${e.message}"
       } finally {
