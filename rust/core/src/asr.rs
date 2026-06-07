@@ -9,8 +9,14 @@ pub fn load(model_dir: &str) -> Result<(), String> {
     imp::load(model_dir)
 }
 
+/// Returns `(transcript, detected_lang_tag)`; the tag is SenseVoice's raw
+/// `<|xx|>` language marker (empty if unavailable).
 #[cfg(target_os = "android")]
-pub fn recognize(model_dir: &str, samples: &[f32], sample_rate: i32) -> Result<String, String> {
+pub fn recognize(
+    model_dir: &str,
+    samples: &[f32],
+    sample_rate: i32,
+) -> Result<(String, String), String> {
     imp::recognize(model_dir, samples, sample_rate)
 }
 
@@ -20,7 +26,11 @@ pub fn load(_model_dir: &str) -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "android"))]
-pub fn recognize(_model_dir: &str, _samples: &[f32], _sample_rate: i32) -> Result<String, String> {
+pub fn recognize(
+    _model_dir: &str,
+    _samples: &[f32],
+    _sample_rate: i32,
+) -> Result<(String, String), String> {
     Err("ASR is only available on Android (native sherpa-onnx not linked on host)".to_owned())
 }
 
@@ -212,10 +222,27 @@ mod imp {
         hr: HomophoneReplacerConfig,
     }
 
-    // We only read `text` (offset 0); the real struct has more trailing fields.
+    // Full mirror of SherpaOnnxOfflineRecognizerResult (c-api.h v1.13.2). We read
+    // `text` and `lang` (SenseVoice fills `lang` with a tag like "<|en|>"); every
+    // preceding field must be declared so `lang`'s offset is correct.
     #[repr(C)]
     struct RecognizerResult {
         text: *const c_char,
+        timestamps: *const f32,
+        count: i32,
+        tokens: *const c_char,
+        tokens_arr: *const *const c_char,
+        json: *const c_char,
+        lang: *const c_char,
+        emotion: *const c_char,
+        event: *const c_char,
+        durations: *const f32,
+        ys_log_probs: *const f32,
+        segment_timestamps: *const f32,
+        segment_durations: *const f32,
+        segment_texts: *const c_char,
+        segment_texts_arr: *const *const c_char,
+        segment_count: i32,
     }
 
     extern "C" {
@@ -316,7 +343,19 @@ mod imp {
         Ok(())
     }
 
-    pub fn recognize(model_dir: &str, samples: &[f32], sample_rate: i32) -> Result<String, String> {
+    unsafe fn cstr(p: *const c_char) -> String {
+        if p.is_null() {
+            String::new()
+        } else {
+            CStr::from_ptr(p).to_string_lossy().into_owned()
+        }
+    }
+
+    pub fn recognize(
+        model_dir: &str,
+        samples: &[f32],
+        sample_rate: i32,
+    ) -> Result<(String, String), String> {
         let mut guard = engine_cell().lock().map_err(|e| e.to_string())?;
         let recognizer = ensure_loaded(&mut guard, model_dir)?.recognizer;
 
@@ -335,19 +374,15 @@ mod imp {
             SherpaOnnxDecodeOfflineStream(recognizer, stream);
         }
         let res = unsafe { SherpaOnnxGetOfflineStreamResult(stream) };
-        let text = if res.is_null() {
-            String::new()
+        let (text, lang) = if res.is_null() {
+            (String::new(), String::new())
         } else {
-            let t = unsafe { (*res).text };
-            let s = if t.is_null() {
-                String::new()
-            } else {
-                unsafe { CStr::from_ptr(t) }.to_string_lossy().into_owned()
-            };
+            let t = unsafe { cstr((*res).text) };
+            let l = unsafe { cstr((*res).lang) };
             unsafe { SherpaOnnxDestroyOfflineRecognizerResult(res) };
-            s
+            (t, l)
         };
         unsafe { SherpaOnnxDestroyOfflineStream(stream) };
-        Ok(text)
+        Ok((text, lang))
     }
 }

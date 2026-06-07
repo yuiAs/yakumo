@@ -50,6 +50,14 @@ pub enum AsrError {
     Failed(String),
 }
 
+/// Transcript plus SenseVoice's detected language tag (`<|en|>`, `<|ja|>`, ...;
+/// empty if the model didn't report one). The tag drives translation direction.
+#[derive(uniffi::Record)]
+pub struct AsrResult {
+    pub text: String,
+    pub lang: String,
+}
+
 /// Loads the SenseVoice recognizer under `model_dir` into the resident engine
 /// without recognizing anything, to warm it up. Idempotent per `model_dir`.
 #[uniffi::export]
@@ -66,12 +74,13 @@ pub fn asr_recognize(
     model_dir: String,
     pcm16le: Vec<u8>,
     sample_rate: i32,
-) -> Result<String, AsrError> {
+) -> Result<AsrResult, AsrError> {
     let samples: Vec<f32> = pcm16le
         .chunks_exact(2)
         .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
         .collect();
-    asr::recognize(&model_dir, &samples, sample_rate).map_err(AsrError::Failed)
+    let (text, lang) = asr::recognize(&model_dir, &samples, sample_rate).map_err(AsrError::Failed)?;
+    Ok(AsrResult { text, lang })
 }
 
 /// Result of a TTS synthesis: the written WAV plus basic audio metadata.

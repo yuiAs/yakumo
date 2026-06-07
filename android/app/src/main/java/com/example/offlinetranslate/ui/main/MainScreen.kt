@@ -101,11 +101,21 @@ private data class Utterance(
   val srcLang: String,
   val translation: String,
   val tgtLang: String,
+  val detected: String = "",
 )
 
 // FLORES code chosen by a cheap script heuristic (kana/kanji -> Japanese source).
 private fun isJapanese(text: String): Boolean =
   text.any { it in '぀'..'ヿ' || it in '一'..'鿿' }
+
+// Map SenseVoice's language tag ("<|en|>", "<|ja|>", ...) to a FLORES source
+// code for the EN<->JA pair. Null for other/empty tags -> caller falls back to
+// the script heuristic.
+private fun floresFromAsrLang(lang: String): String? = when {
+  lang.contains("ja") -> "jpn_Jpan"
+  lang.contains("en") -> "eng_Latn"
+  else -> null
+}
 
 // End-to-end debug flow: record -> ASR (Transcript) -> NLLB (Translate) -> show both.
 @Composable
@@ -147,14 +157,16 @@ private fun SessionPanel(modifier: Modifier = Modifier) {
             val pcm = recordPcm16(5000)
             status = "Transcribing…"
             Models.ensure(context, "asr") { status = it }
-            val transcript = asrRecognize(asrDir.absolutePath, pcm, 16000)
-            val ja = isJapanese(transcript)
-            val src = if (ja) "jpn_Jpan" else "eng_Latn"
-            val tgt = if (ja) "eng_Latn" else "jpn_Jpan"
+            val asr = asrRecognize(asrDir.absolutePath, pcm, 16000)
+            val transcript = asr.text
+            // Prefer SenseVoice's detected language; fall back to the heuristic.
+            val src = floresFromAsrLang(asr.lang)
+              ?: if (isJapanese(transcript)) "jpn_Jpan" else "eng_Latn"
+            val tgt = if (src == "jpn_Jpan") "eng_Latn" else "jpn_Jpan"
             status = "Translating $src → $tgt…"
             Models.ensure(context, "nllb") { status = it }
             val translation = translateText(nllbDir.absolutePath, transcript, src, tgt, ortDylib)
-            Utterance(transcript, src, translation, tgt)
+            Utterance(transcript, src, translation, tgt, asr.lang)
           }
           log.add(0, u)
           status = "Done. (${log.size} utterance${if (log.size == 1) "" else "s"})"
@@ -176,7 +188,7 @@ private fun SessionPanel(modifier: Modifier = Modifier) {
       verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
       Text(
-        "Transcript [${u.srcLang}]: ${u.transcript}",
+        "Transcript [${u.srcLang}${if (u.detected.isNotBlank()) " · asr:${u.detected}" else ""}]: ${u.transcript}",
         style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
       )
       Text(
@@ -353,14 +365,14 @@ private fun AsrPanel(modifier: Modifier = Modifier) {
       status = "Recording 5s…"
       scope.launch {
         try {
-          val text = withContext(Dispatchers.IO) {
+          val asr = withContext(Dispatchers.IO) {
             val pcm = recordPcm16(durationMs = 5000)
             status = "Transcribing…"
             Models.ensure(context, "asr") { status = it }
             asrRecognize(internalDir.absolutePath, pcm, 16000)
           }
-          transcript = text.ifBlank { "(no speech detected)" }
-          status = "Done."
+          transcript = asr.text.ifBlank { "(no speech detected)" }
+          status = if (asr.lang.isNotBlank()) "Done. (detected ${asr.lang})" else "Done."
         } catch (e: Throwable) {
           status = "Error: ${e.message}"
         } finally {

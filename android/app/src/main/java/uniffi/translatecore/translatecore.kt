@@ -918,7 +918,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_translatecore_checksum_func_asr_load() != 40231.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_translatecore_checksum_func_asr_recognize() != 19243.toShort()) {
+    if (lib.uniffi_translatecore_checksum_func_asr_recognize() != 500.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_translatecore_checksum_func_core_version() != 32937.toShort()) {
@@ -1111,6 +1111,42 @@ public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
     override fun write(value: ByteArray, buf: ByteBuffer) {
         buf.putInt(value.size)
         buf.put(value)
+    }
+}
+
+
+
+/**
+ * Transcript plus SenseVoice's detected language tag (`<|en|>`, `<|ja|>`, ...;
+ * empty if the model didn't report one). The tag drives translation direction.
+ */
+data class AsrResult (
+    var `text`: kotlin.String, 
+    var `lang`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeAsrResult: FfiConverterRustBuffer<AsrResult> {
+    override fun read(buf: ByteBuffer): AsrResult {
+        return AsrResult(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: AsrResult) = (
+            FfiConverterString.allocationSize(value.`text`) +
+            FfiConverterString.allocationSize(value.`lang`)
+    )
+
+    override fun write(value: AsrResult, buf: ByteBuffer) {
+            FfiConverterString.write(value.`text`, buf)
+            FfiConverterString.write(value.`lang`, buf)
     }
 }
 
@@ -1348,8 +1384,8 @@ public object FfiConverterTypeTtsError : FfiConverterRustBuffer<TtsException> {
          * Bytes are used over the FFI to avoid boxing tens of thousands of floats.
          * Loads the recognizer on first use, then reuses the resident engine.
          */
-    @Throws(AsrException::class) fun `asrRecognize`(`modelDir`: kotlin.String, `pcm16le`: kotlin.ByteArray, `sampleRate`: kotlin.Int): kotlin.String {
-            return FfiConverterString.lift(
+    @Throws(AsrException::class) fun `asrRecognize`(`modelDir`: kotlin.String, `pcm16le`: kotlin.ByteArray, `sampleRate`: kotlin.Int): AsrResult {
+            return FfiConverterTypeAsrResult.lift(
     uniffiRustCallWithError(AsrException) { _status ->
     UniffiLib.INSTANCE.uniffi_translatecore_fn_func_asr_recognize(
         FfiConverterString.lower(`modelDir`),FfiConverterByteArray.lower(`pcm16le`),FfiConverterInt.lower(`sampleRate`),_status)
