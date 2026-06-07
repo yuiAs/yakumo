@@ -21,6 +21,20 @@ pub fn translate_smoke(ort_dylib: String, model_path: String) -> Result<String, 
     translate::smoke(&ort_dylib, &model_path).map_err(TranslateError::Failed)
 }
 
+/// Translates `text` from `src_lang` to `tgt_lang` (NLLB FLORES codes, e.g.
+/// "eng_Latn", "jpn_Jpan") using the NLLB ONNX models under `model_dir`.
+#[uniffi::export]
+pub fn translate_text(
+    model_dir: String,
+    text: String,
+    src_lang: String,
+    tgt_lang: String,
+    ort_dylib: String,
+) -> Result<String, TranslateError> {
+    translate::translate(&model_dir, &text, &src_lang, &tgt_lang, &ort_dylib)
+        .map_err(TranslateError::Failed)
+}
+
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum AsrError {
     #[error("{0}")]

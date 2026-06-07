@@ -723,6 +723,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -747,6 +749,8 @@ internal interface UniffiLib : Library {
     fun uniffi_translatecore_fn_func_sherpa_version(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_translatecore_fn_func_translate_smoke(`ortDylib`: RustBuffer.ByValue,`modelPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_translatecore_fn_func_translate_text(`modelDir`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,`srcLang`: RustBuffer.ByValue,`tgtLang`: RustBuffer.ByValue,`ortDylib`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_translatecore_fn_func_tts_synthesize(`modelDir`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,`sid`: Int,`speed`: Float,`outWav`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -872,6 +876,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_translatecore_checksum_func_translate_smoke(
     ): Short
+    fun uniffi_translatecore_checksum_func_translate_text(
+    ): Short
     fun uniffi_translatecore_checksum_func_tts_synthesize(
     ): Short
     fun ffi_translatecore_uniffi_contract_version(
@@ -904,6 +910,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_translatecore_checksum_func_translate_smoke() != 47779.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_translatecore_checksum_func_translate_text() != 12726.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_translatecore_checksum_func_tts_synthesize() != 43265.toShort()) {
@@ -1355,6 +1364,20 @@ public object FfiConverterTypeTtsError : FfiConverterRustBuffer<TtsException> {
     uniffiRustCallWithError(TranslateException) { _status ->
     UniffiLib.INSTANCE.uniffi_translatecore_fn_func_translate_smoke(
         FfiConverterString.lower(`ortDylib`),FfiConverterString.lower(`modelPath`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Translates `text` from `src_lang` to `tgt_lang` (NLLB FLORES codes, e.g.
+         * "eng_Latn", "jpn_Jpan") using the NLLB ONNX models under `model_dir`.
+         */
+    @Throws(TranslateException::class) fun `translateText`(`modelDir`: kotlin.String, `text`: kotlin.String, `srcLang`: kotlin.String, `tgtLang`: kotlin.String, `ortDylib`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(TranslateException) { _status ->
+    UniffiLib.INSTANCE.uniffi_translatecore_fn_func_translate_text(
+        FfiConverterString.lower(`modelDir`),FfiConverterString.lower(`text`),FfiConverterString.lower(`srcLang`),FfiConverterString.lower(`tgtLang`),FfiConverterString.lower(`ortDylib`),_status)
 }
     )
     }

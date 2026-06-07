@@ -45,7 +45,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import uniffi.translatecore.asrRecognize
-import uniffi.translatecore.translateSmoke
+import uniffi.translatecore.translateText
 import uniffi.translatecore.ttsSynthesize
 
 @Composable
@@ -93,36 +93,52 @@ private fun TranslatePanel(modifier: Modifier = Modifier) {
   val externalZip = remember { File(context.getExternalFilesDir(null), "nllb.zip") }
   val internalDir = remember { File(context.filesDir, "nllb") }
   // onnxruntime is already loaded into the process (translatecore.so -> sherpa ->
-  // onnxruntime). Passing the soname lets ort dlopen the already-resident lib,
-  // which works even with extractNativeLibs=false (libs mmap'd from the APK).
+  // onnxruntime). The soname lets ort dlopen the already-resident lib even with
+  // extractNativeLibs=false (libs mmap'd from the APK, no on-disk path).
   val ortDylib = "libonnxruntime.so"
+
+  var text by remember { mutableStateOf("Good morning, everyone. It is such a pleasure to see you all.") }
+  var result by remember { mutableStateOf("") }
   var status by remember {
     mutableStateOf(if (internalDir.exists() || externalZip.exists()) "Model staged." else "No nllb.zip.")
   }
   var busy by remember { mutableStateOf(false) }
 
-  Text("Translation runtime smoke (Step A)", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
-  Button(
-    enabled = !busy,
-    onClick = {
-      busy = true
-      status = "Loading ORT + NLLB encoder…"
-      scope.launch {
-        try {
-          val r = withContext(Dispatchers.IO) {
-            if (!internalDir.exists()) unzipTo(externalZip, internalDir)
-            translateSmoke(ortDylib, File(internalDir, "encoder_model_quantized.onnx").absolutePath)
-          }
-          status = "OK: $r"
-        } catch (e: Throwable) {
-          status = "Error: ${e.message}"
-        } finally {
-          busy = false
+  fun run(src: String, tgt: String) {
+    busy = true
+    result = ""
+    status = "Translating $src → $tgt…"
+    scope.launch {
+      try {
+        val r = withContext(Dispatchers.IO) {
+          if (!internalDir.exists()) unzipTo(externalZip, internalDir)
+          translateText(internalDir.absolutePath, text, src, tgt, ortDylib)
         }
+        result = r
+        status = "Done ($src → $tgt)."
+      } catch (e: Throwable) {
+        status = "Error: ${e.message}"
+      } finally {
+        busy = false
       }
-    },
-  ) { Text(if (busy) "Working…" else "Run ORT smoke") }
+    }
+  }
+
+  Text("Translation (NLLB-200)", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
+  OutlinedTextField(
+    value = text,
+    onValueChange = { text = it },
+    label = { Text("Text") },
+    modifier = Modifier.fillMaxWidth(),
+  )
+  Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Button(enabled = !busy, onClick = { run("eng_Latn", "jpn_Jpan") }) { Text("EN → JA") }
+    Button(enabled = !busy, onClick = { run("jpn_Jpan", "eng_Latn") }) { Text("JA → EN") }
+  }
   Text(status)
+  if (result.isNotEmpty()) {
+    Text("Translation: $result", style = androidx.compose.material3.MaterialTheme.typography.bodyLarge)
+  }
 }
 
 // Speeds applied at playback time (decoupled from synthesis), per the design.
