@@ -115,6 +115,10 @@ private fun floresFromAsrLang(lang: String): String? = when {
   else -> null
 }
 
+// FLORES target code -> Locale for the OS TTS engine.
+private fun localeFromFlores(code: String): Locale =
+  if (code.startsWith("jpn")) Locale.JAPANESE else Locale.ENGLISH
+
 // End-to-end debug flow: record -> ASR (Transcript) -> NLLB (Translate) -> show both.
 @Composable
 private fun SessionPanel(modifier: Modifier = Modifier) {
@@ -138,6 +142,18 @@ private fun SessionPanel(modifier: Modifier = Modifier) {
   var nextId by remember { mutableStateOf(0L) }
   var status by remember { mutableStateOf("Ready. (record EN or JA — direction auto)") }
   var busy by remember { mutableStateOf(false) }
+  var autoSpeak by remember { mutableStateOf(true) }
+
+  // OS TTS for reading the translation aloud (Japanese for the EN→JA flow).
+  val ttsRef = remember { mutableStateOf<TextToSpeech?>(null) }
+  DisposableEffect(Unit) {
+    val engine = TextToSpeech(context) { }
+    ttsRef.value = engine
+    onDispose {
+      engine.stop()
+      engine.shutdown()
+    }
+  }
 
   Text("Session — record → transcript → translate", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
 
@@ -177,6 +193,16 @@ private fun SessionPanel(modifier: Modifier = Modifier) {
           }
           val idx = log.indexOfFirst { it.id == id }
           if (idx >= 0) log[idx] = log[idx].copy(translation = translation)
+
+          // Read the translation aloud via the OS engine, if enabled.
+          if (autoSpeak) {
+            ttsRef.value?.let { engine ->
+              val avail = engine.setLanguage(localeFromFlores(tgt))
+              if (avail != TextToSpeech.LANG_MISSING_DATA && avail != TextToSpeech.LANG_NOT_SUPPORTED) {
+                engine.speak(translation, TextToSpeech.QUEUE_FLUSH, null, "session-$id")
+              }
+            }
+          }
           status = "Done. (${log.size} utterance${if (log.size == 1) "" else "s"})"
         } catch (e: Throwable) {
           status = "Error: ${e.message}"
@@ -186,6 +212,14 @@ private fun SessionPanel(modifier: Modifier = Modifier) {
       }
     },
   ) { Text(if (busy) "Working…" else "Record & translate") }
+
+  Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FilterChip(
+      selected = autoSpeak,
+      onClick = { autoSpeak = !autoSpeak },
+      label = { Text(if (autoSpeak) "🔊 Speak: on" else "🔇 Speak: off") },
+    )
+  }
 
   Text(status)
 
