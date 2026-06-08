@@ -1,4 +1,6 @@
 /build
 
-# Built by the cargoBuildRustCore Gradle task (see build.gradle.kts).
-/src/main/jniLibs/*/libtranslatecore.so
+# jniLibs holds only generated/fetched native libs, none of them source:
+#   libtranslatecore.so                       — built by cargoBuildRustCore
+#   libonnxruntime.so, libsherpa-onnx-*.so    — fetched by fetchSherpaPrebuilt
+/src/main/jniLibs/

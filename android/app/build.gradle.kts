@@ -1,3 +1,15 @@
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
+import java.net.HttpURLConnection
+import java.net.URL
+
+buildscript {
+  repositories { mavenCentral() }
+  // Reused by the fetchSherpaPrebuilt task to extract the release tar.bz2,
+  // mirroring the in-app extraction (same library, same version).
+  dependencies { classpath("org.apache.commons:commons-compress:1.27.1") }
+}
+
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.compose.compiler)
@@ -87,6 +99,88 @@ val cargoBuildRustCore = tasks.register<Exec>("cargoBuildRustCore") {
         add("build"); add("--release")
     }
 }
+
+// ---- Third-party sherpa-onnx prebuilt libs --------------------------------
+// libonnxruntime.so + libsherpa-onnx-{c,cxx}-api.so are prebuilt binaries from
+// the sherpa-onnx release, fetched at build time rather than committed. They
+// must land in jniLibs before cargoBuildRustCore links libsherpa-onnx-c-api.so
+// (build.rs) and before AGP merges jniLibs into the APK.
+val sherpaVersion = "1.13.2"
+val sherpaLibs = listOf(
+    "libsherpa-onnx-c-api.so",
+    "libsherpa-onnx-cxx-api.so",
+    "libonnxruntime.so",
+)
+
+val fetchSherpaPrebuilt = tasks.register("fetchSherpaPrebuilt") {
+    group = "build"
+    description = "Downloads the prebuilt sherpa-onnx native libs into jniLibs."
+
+    val version = sherpaVersion
+    val libs = sherpaLibs
+    val abis = androidAbis
+    val outDir = jniLibsDir.asFile
+    // Cached in Gradle user home so `clean` and fresh checkouts don't re-download.
+    val cacheDir = File(gradle.gradleUserHomeDir, "caches/sherpa-onnx-prebuilt")
+
+    inputs.property("sherpaVersion", version)
+    outputs.files(abis.flatMap { abi -> libs.map { File(outDir, "$abi/$it") } })
+
+    doLast {
+        val archive = File(cacheDir, "sherpa-onnx-v$version-android.tar.bz2")
+        if (!archive.exists() || archive.length() == 0L) {
+            cacheDir.mkdirs()
+            val url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/" +
+                "v$version/sherpa-onnx-v$version-android.tar.bz2"
+            logger.lifecycle("Fetching $url")
+            // Manual redirect follow: GitHub bounces release assets to a CDN host.
+            var current = url
+            var hops = 0
+            while (true) {
+                val conn = (URL(current).openConnection() as HttpURLConnection).apply {
+                    instanceFollowRedirects = false
+                    connectTimeout = 30_000
+                    readTimeout = 60_000
+                }
+                val code = conn.responseCode
+                if (code in 300..399) {
+                    val loc = conn.getHeaderField("Location") ?: error("redirect without Location")
+                    conn.disconnect()
+                    current = if (loc.startsWith("http")) loc else URL(URL(current), loc).toString()
+                    check(++hops <= 8) { "too many redirects" }
+                    continue
+                }
+                check(code == 200) { "HTTP $code for $current" }
+                val part = File(archive.parentFile, archive.name + ".part")
+                conn.inputStream.use { input -> part.outputStream().use { input.copyTo(it) } }
+                conn.disconnect()
+                if (archive.exists()) archive.delete()
+                check(part.renameTo(archive)) { "rename ${part.name} -> ${archive.name} failed" }
+                break
+            }
+        }
+
+        val wanted = abis.flatMap { abi -> libs.map { "jniLibs/$abi/$it" } }.toSet()
+        BZip2CompressorInputStream(archive.inputStream().buffered()).use { bz ->
+            TarArchiveInputStream(bz).use { tar ->
+                var entry = tar.nextEntry
+                while (entry != null) {
+                    val rel = entry.name.removePrefix("./")
+                    if (!entry.isDirectory && rel in wanted) {
+                        val dest = File(outDir, rel.removePrefix("jniLibs/"))
+                        dest.parentFile.mkdirs()
+                        dest.outputStream().use { tar.copyTo(it) }
+                    }
+                    entry = tar.nextEntry
+                }
+            }
+        }
+    }
+}
+
+// build.rs links against jniLibs/<abi>/libsherpa-onnx-c-api.so, so the prebuilt
+// libs must be in place before the Rust core compiles.
+cargoBuildRustCore.configure { dependsOn(fetchSherpaPrebuilt) }
 
 // preBuild gates every variant task, so the .so exists before the jniLibs merge.
 tasks.named("preBuild") { dependsOn(cargoBuildRustCore) }
