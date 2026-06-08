@@ -9,12 +9,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -25,8 +28,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.layout.Row
 import app.rly3h.yakumo.BuildConfig
+import app.rly3h.yakumo.data.ModelCancelled
 import app.rly3h.yakumo.data.Models
 import app.rly3h.yakumo.data.Settings
 import kotlinx.coroutines.Dispatchers
@@ -57,6 +62,12 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
   var modelStatus by remember { mutableStateOf(modelLine()) }
   var engineStatus by remember { mutableStateOf("not loaded (first use loads them)") }
   var busy by remember { mutableStateOf(false) }
+
+  // Download overlay state. The cancel flag is read from the IO thread, so it is
+  // an AtomicBoolean rather than Compose state.
+  var downloading by remember { mutableStateOf(false) }
+  var dlProgress by remember { mutableStateOf("") }
+  val cancelFlag = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
 
   Column(
     modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -92,26 +103,32 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     SectionTitle("Models")
     Text(modelStatus, style = MaterialTheme.typography.bodySmall)
     Button(
-      enabled = !busy,
+      enabled = !busy && !downloading,
       onClick = {
-        busy = true
+        downloading = true
+        cancelFlag.set(false)
+        dlProgress = "Starting…"
         scope.launch {
           try {
             withContext(Dispatchers.IO) {
-              for (id in ids) Models.ensure(context, id) { modelStatus = it }
+              for (id in ids) {
+                Models.ensure(context, id, onProgress = { dlProgress = it }, cancel = { cancelFlag.get() })
+              }
             }
             modelStatus = modelLine()
+          } catch (c: ModelCancelled) {
+            modelStatus = "Download cancelled"
           } catch (e: Throwable) {
             modelStatus = "Error: ${e.message}"
           } finally {
-            busy = false
+            downloading = false
           }
         }
       },
-    ) { Text(if (busy) "Working…" else "Download all models") }
+    ) { Text("Download all models") }
 
     Button(
-      enabled = !busy,
+      enabled = !busy && !downloading,
       onClick = {
         busy = true
         engineStatus = "loading…"
@@ -119,10 +136,10 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
           try {
             withContext(Dispatchers.IO) {
               engineStatus = "loading asr…"
-              Models.ensure(context, "asr") { engineStatus = it }
+              Models.ensure(context, "asr", onProgress = { engineStatus = it })
               asrLoad(Models.dir(context, "asr").absolutePath)
               engineStatus = "loading nllb…"
-              Models.ensure(context, "nllb") { engineStatus = it }
+              Models.ensure(context, "nllb", onProgress = { engineStatus = it })
               translateLoad(Models.dir(context, "nllb").absolutePath, ORT_DYLIB)
             }
             engineStatus = "loaded (asr, nllb) — resident"
@@ -145,6 +162,23 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     )
     Text(remember { coreVersion() }, style = MaterialTheme.typography.bodySmall)
     Text(remember { sherpaVersion() }, style = MaterialTheme.typography.bodySmall)
+  }
+
+  if (downloading) {
+    AlertDialog(
+      onDismissRequest = {}, // require an explicit Cancel; ignore outside taps
+      title = { Text("Downloading models") },
+      text = {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+          LinearProgressIndicator(Modifier.fillMaxWidth())
+          Text(dlProgress, style = MaterialTheme.typography.bodySmall)
+        }
+      },
+      confirmButton = {
+        TextButton(onClick = { cancelFlag.set(true) }) { Text("Cancel") }
+      },
+      properties = DialogProperties(dismissOnClickOutside = false, dismissOnBackPress = false),
+    )
   }
 }
 

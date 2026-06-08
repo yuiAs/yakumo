@@ -25,6 +25,9 @@ data class ModelSpec(
 
 @Serializable data class ArchiveSpec(val url: String, val format: String)
 
+/** Thrown by [Models.ensure] when a `cancel` callback returns true mid-transfer. */
+class ModelCancelled : Exception("download cancelled")
+
 /**
  * First-run model provisioning: reads assets/models.json and downloads each
  * model into internal storage (filesDir). Replaces the old adb-push workflow.
@@ -50,8 +53,17 @@ object Models {
     return File(File(context.filesDir, s.dir), s.checkFile).exists()
   }
 
-  /** Downloads/extracts the model if missing. Blocking — call from an IO thread. */
-  fun ensure(context: Context, id: String, onProgress: (String) -> Unit = {}) {
+  /**
+   * Downloads/extracts the model if missing. Blocking — call from an IO thread.
+   * `cancel` is polled during transfer/extraction; returning true aborts with
+   * [ModelCancelled] and removes the partial download.
+   */
+  fun ensure(
+    context: Context,
+    id: String,
+    onProgress: (String) -> Unit = {},
+    cancel: () -> Boolean = { false },
+  ) {
     val s = spec(context, id)
     val target = File(File(context.filesDir, s.dir), s.checkFile)
     if (target.exists()) {
@@ -63,9 +75,9 @@ object Models {
       // tar.bz2 contains a top-level folder == s.dir, so extract into filesDir.
       val tmp = File(context.cacheDir, "$id-archive")
       onProgress("$id: downloading…")
-      download(archive.url, tmp) { b -> onProgress("$id: ${b / 1_000_000} MB") }
+      download(archive.url, tmp, cancel) { b -> onProgress("$id: ${b / 1_000_000} MB") }
       onProgress("$id: extracting…")
-      extractTarBz2(tmp, context.filesDir)
+      extractTarBz2(tmp, context.filesDir, cancel) { b -> onProgress("$id: extracting… ${b / 1_000_000} MB") }
       tmp.delete()
     } else {
       val dir = File(context.filesDir, s.dir).apply { mkdirs() }
@@ -77,14 +89,14 @@ object Models {
           continue
         }
         onProgress("$id: ${f.name}…")
-        download(f.url, File(dir, f.name)) { b -> onProgress("$id: ${f.name} ${b / 1_000_000} MB") }
+        download(f.url, File(dir, f.name), cancel) { b -> onProgress("$id: ${f.name} ${b / 1_000_000} MB") }
       }
     }
     onProgress("$id: done")
   }
 
   // Streaming download that manually follows redirects (HF/GitHub CDN hops).
-  private fun download(urlStr: String, dest: File, onProgress: (Long) -> Unit) {
+  private fun download(urlStr: String, dest: File, cancel: () -> Boolean, onProgress: (Long) -> Unit) {
     var url = urlStr
     var hops = 0
     while (true) {
@@ -106,11 +118,16 @@ object Models {
         error("HTTP $code for $url")
       }
       val part = File(dest.parentFile, dest.name + ".part")
+      var cancelled = false
       conn.inputStream.use { input ->
         part.outputStream().use { out ->
           val buf = ByteArray(1 shl 16)
           var total = 0L
           while (true) {
+            if (cancel()) {
+              cancelled = true
+              break
+            }
             val n = input.read(buf)
             if (n < 0) break
             out.write(buf, 0, n)
@@ -120,26 +137,47 @@ object Models {
         }
       }
       conn.disconnect()
+      if (cancelled) {
+        part.delete()
+        throw ModelCancelled()
+      }
       if (dest.exists()) dest.delete()
       check(part.renameTo(dest)) { "rename ${part.name} -> ${dest.name} failed" }
       return
     }
   }
 
-  private fun extractTarBz2(archive: File, destDir: File) {
+  private fun extractTarBz2(
+    archive: File,
+    destDir: File,
+    cancel: () -> Boolean,
+    onProgress: (Long) -> Unit,
+  ) {
     val destRoot = destDir.canonicalFile
+    var written = 0L
     archive.inputStream().buffered().use { fin ->
       BZip2CompressorInputStream(fin).use { bz ->
         TarArchiveInputStream(bz).use { tar ->
           var entry = tar.nextEntry
           while (entry != null) {
+            if (cancel()) throw ModelCancelled()
             val out = File(destDir, entry.name).canonicalFile
             require(out.path.startsWith(destRoot.path)) { "tar entry escapes dest: ${entry.name}" }
             if (entry.isDirectory) {
               out.mkdirs()
             } else {
               out.parentFile?.mkdirs()
-              out.outputStream().use { tar.copyTo(it) }
+              out.outputStream().use { os ->
+                val buf = ByteArray(1 shl 16)
+                while (true) {
+                  if (cancel()) throw ModelCancelled()
+                  val n = tar.read(buf)
+                  if (n < 0) break
+                  os.write(buf, 0, n)
+                  written += n
+                  onProgress(written)
+                }
+              }
             }
             entry = tar.nextEntry
           }
