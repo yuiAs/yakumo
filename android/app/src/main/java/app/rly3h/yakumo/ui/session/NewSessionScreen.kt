@@ -47,6 +47,9 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uniffi.translatecore.asrRecognize
+import uniffi.translatecore.asrStreamAccept
+import uniffi.translatecore.asrStreamLoad
+import uniffi.translatecore.asrStreamReset
 import uniffi.translatecore.translateText
 
 private data class LiveTurn(
@@ -67,7 +70,10 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
   val settings = remember { Settings(context) }
 
   val asrDir = remember { Models.dir(context, "asr") }
+  val streamDir = remember { Models.dir(context, "asr_stream") }
   val nllbDir = remember { Models.dir(context, "nllb") }
+  // Captured once: switching engines mid-session isn't supported.
+  val streamingAsr = remember { settings.streamingAsr }
 
   val startedAt = remember { System.currentTimeMillis() }
   val sessionId = remember { SessionStore.newId(startedAt) }
@@ -92,6 +98,7 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
   val turns = remember { mutableStateListOf<LiveTurn>() } // chronological: newest last
   var nextId by remember { mutableStateOf(0L) }
   var status by remember { mutableStateOf("Tap the mic and speak (EN or JA).") }
+  var partial by remember { mutableStateOf("") } // live transcript (streaming mode)
   var recording by remember { mutableStateOf(false) }
   var autoSpeak by remember { mutableStateOf(settings.autoSpeak) }
   val listState = rememberLazyListState()
@@ -129,22 +136,17 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
     }
   }
 
-  // One captured segment -> transcript (shown immediately) -> translation
-  // (patched in) -> spoken. ASR/NLLB on IO; state writes on Main.
-  suspend fun processSegment(pcm: ByteArray) {
-    val asr = withContext(Dispatchers.IO) {
-      Models.ensure(context, "asr")
-      asrRecognize(asrDir.absolutePath, pcm, 16000)
-    }
-    val transcript = asr.text.trim()
-    if (transcript.isEmpty()) return // drop non-speech segments
-    val src = floresFromAsrLang(asr.lang)
+  // Final transcript -> turn (shown at once) -> translation (patched in) ->
+  // spoken. `lang` is the ASR language tag, empty for the English-only streaming
+  // recognizer (then the script heuristic picks the direction).
+  suspend fun finalizeTurn(transcript: String, lang: String) {
+    val src = floresFromAsrLang(lang)
       ?: if (isJapanese(transcript)) "jpn_Jpan" else "eng_Latn"
     val tgt = if (src == "jpn_Jpan") "eng_Latn" else "jpn_Jpan"
 
     val id = withContext(Dispatchers.Main) {
       val newId = nextId++
-      turns.add(LiveTurn(newId, transcript, src, tgt, asr.lang, translation = null))
+      turns.add(LiveTurn(newId, transcript, src, tgt, lang, translation = null))
       newId
     }
     val translation = withContext(Dispatchers.IO) {
@@ -159,38 +161,94 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
     speak(translation, tgt)
   }
 
+  // Offline (SenseVoice) path: one VAD-cut segment -> transcript -> finalize.
+  suspend fun processSegment(pcm: ByteArray) {
+    val asr = withContext(Dispatchers.IO) {
+      Models.ensure(context, "asr")
+      asrRecognize(asrDir.absolutePath, pcm, 16000)
+    }
+    val transcript = asr.text.trim()
+    if (transcript.isEmpty()) return // drop non-speech segments
+    finalizeTurn(transcript, asr.lang)
+  }
+
+  // Capture and processing are decoupled by a channel so recording keeps running
+  // while each finished segment is transcribed/translated.
+  suspend fun runSegmented() = kotlinx.coroutines.coroutineScope {
+    val vad = settings.vadParams() // latest knobs at the start of this session
+    val channel = Channel<ByteArray>(Channel.UNLIMITED)
+    val capture = launch(Dispatchers.IO) {
+      try { captureLoop(running, vad) { seg -> channel.trySend(seg) } } finally { channel.close() }
+    }
+    val consumer = launch(Dispatchers.IO) {
+      for (seg in channel) {
+        try {
+          processSegment(seg)
+        } catch (e: Throwable) {
+          withContext(Dispatchers.Main) { status = "Error: ${e.message}" }
+        }
+      }
+    }
+    capture.join()
+    consumer.join()
+  }
+
+  // Streaming (nemotron-en) path: feed raw mic chunks into the online recognizer,
+  // show its partial transcript live, and finalize each utterance on its endpoint.
+  suspend fun runStreaming() = kotlinx.coroutines.coroutineScope {
+    val ep = settings.endpointParams() // latest knobs at the start of this session
+    withContext(Dispatchers.IO) {
+      asrStreamLoad(streamDir.absolutePath, ep.rule1, ep.rule2, ep.rule3)
+      asrStreamReset(streamDir.absolutePath)
+    }
+    val channel = Channel<ByteArray>(Channel.UNLIMITED)
+    val capture = launch(Dispatchers.IO) {
+      try { streamingCaptureLoop(running) { channel.trySend(it) } } finally { channel.close() }
+    }
+    val consumer = launch(Dispatchers.IO) {
+      var current = ""
+      for (chunk in channel) {
+        val r = try {
+          asrStreamAccept(streamDir.absolutePath, chunk, 16000)
+        } catch (e: Throwable) {
+          withContext(Dispatchers.Main) { status = "Error: ${e.message}" }
+          continue
+        }
+        current = r.text
+        withContext(Dispatchers.Main) { partial = r.text }
+        if (r.endpoint) {
+          val t = r.text.trim()
+          current = ""
+          withContext(Dispatchers.Main) { partial = "" }
+          if (t.isNotEmpty()) finalizeTurn(t, "")
+        }
+      }
+      // Stopped mid-utterance: flush whatever was decoded so far.
+      val tail = current.trim()
+      withContext(Dispatchers.Main) { partial = "" }
+      if (tail.isNotEmpty()) finalizeTurn(tail, "")
+      withContext(Dispatchers.IO) { asrStreamReset(streamDir.absolutePath) }
+    }
+    capture.join()
+    consumer.join()
+  }
+
   fun start() {
     if (!hasPermission) {
       permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
       return
     }
+    if (streamingAsr && !Models.isPresent(context, "asr_stream")) {
+      status = "Streaming model missing — download it in Settings → Experimental."
+      return
+    }
     recording = true
     running.set(true)
-    status = "Listening… speak, then tap Stop."
-    val vad = settings.vadParams() // latest knobs at the start of this session
+    status = if (streamingAsr) "Listening (streaming EN)…" else "Listening… speak, then tap Stop."
     scope.launch {
-      // Capture and processing are decoupled by a channel: recording keeps
-      // running while each finished segment is transcribed/translated.
-      val channel = Channel<ByteArray>(Channel.UNLIMITED)
-      val capture = launch(Dispatchers.IO) {
-        try {
-          captureLoop(running, vad) { seg -> channel.trySend(seg) }
-        } finally {
-          channel.close()
-        }
-      }
-      val consumer = launch(Dispatchers.IO) {
-        for (seg in channel) {
-          try {
-            processSegment(seg)
-          } catch (e: Throwable) {
-            withContext(Dispatchers.Main) { status = "Error: ${e.message}" }
-          }
-        }
-      }
-      capture.join()
-      consumer.join()
+      if (streamingAsr) runStreaming() else runSegmented()
       recording = false
+      partial = ""
       status = "Stopped. (${turns.size} turn${if (turns.size == 1) "" else "s"})"
     }
   }
@@ -243,6 +301,13 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+      if (partial.isNotBlank()) {
+        Text(
+          partial,
+          style = MaterialTheme.typography.bodyLarge,
+          color = MaterialTheme.colorScheme.primary,
+        )
+      }
       Text(status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
       Surface(
         onClick = { if (recording) stop() else start() },

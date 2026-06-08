@@ -10,6 +10,15 @@
       }
     },
     {
+      "id": "asr_stream",
+      "dir": "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25",
+      "checkFile": "encoder.int8.onnx",
+      "archive": {
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25.tar.bz2",
+        "format": "tar.bz2"
+      }
+    },
+    {
       "id": "nllb",
       "dir": "nllb",
       "checkFile": "decoder_model_merged_quantized.onnx",

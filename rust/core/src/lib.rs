@@ -82,6 +82,54 @@ pub fn asr_recognize(
     Ok(AsrResult { text, lang })
 }
 
+/// Partial transcript from the streaming recognizer plus whether sherpa detected
+/// an end-of-utterance on this chunk. On `endpoint`, `text` is the finalized
+/// transcript for the segment that just ended and the stream has been reset.
+#[derive(uniffi::Record)]
+pub struct AsrStreamResult {
+    pub text: String,
+    pub endpoint: bool,
+}
+
+/// Loads the streaming (nemotron-en) recognizer under `model_dir` and creates its
+/// resident stream. `rule1`/`rule2`/`rule3` are the endpoint rules in seconds
+/// (trailing silence before / after decoded speech, and max utterance length);
+/// the recognizer is recreated when they change. Idempotent for equal arguments.
+#[uniffi::export]
+pub fn asr_stream_load(
+    model_dir: String,
+    rule1: f32,
+    rule2: f32,
+    rule3: f32,
+) -> Result<(), AsrError> {
+    asr::stream_load(&model_dir, rule1, rule2, rule3).map_err(AsrError::Failed)
+}
+
+/// Feeds one chunk of 16 kHz mono PCM (signed 16-bit little-endian) into the
+/// resident streaming recognizer and returns the current partial transcript and
+/// whether an utterance just ended. Loads the recognizer on first use.
+#[uniffi::export]
+pub fn asr_stream_accept(
+    model_dir: String,
+    pcm16le: Vec<u8>,
+    sample_rate: i32,
+) -> Result<AsrStreamResult, AsrError> {
+    let samples: Vec<f32> = pcm16le
+        .chunks_exact(2)
+        .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
+        .collect();
+    let (text, endpoint) =
+        asr::stream_accept(&model_dir, &samples, sample_rate).map_err(AsrError::Failed)?;
+    Ok(AsrStreamResult { text, endpoint })
+}
+
+/// Discards any in-progress utterance in the resident stream (e.g. when the user
+/// stops recording).
+#[uniffi::export]
+pub fn asr_stream_reset(model_dir: String) -> Result<(), AsrError> {
+    asr::stream_reset(&model_dir).map_err(AsrError::Failed)
+}
+
 /// Version banner for the native core. Used by the PoC to confirm the app is
 /// actually executing Rust rather than a Kotlin stub.
 #[uniffi::export]

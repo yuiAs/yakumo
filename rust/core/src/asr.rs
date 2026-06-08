@@ -34,6 +34,55 @@ pub fn recognize(
     Err("ASR is only available on Android (native sherpa-onnx not linked on host)".to_owned())
 }
 
+// --- Streaming (online) ASR: nemotron-speech-streaming-en via sherpa-onnx's
+// OnlineRecognizer. A separate engine from the offline SenseVoice path above;
+// the recognizer and its single stream are kept resident across chunks. ---
+
+/// Loads/configures the streaming recognizer. The three endpoint rules (trailing
+/// silence in seconds before / after decoded speech, and max utterance length)
+/// are baked into the recognizer at creation, so changing them recreates it.
+#[cfg(target_os = "android")]
+pub fn stream_load(model_dir: &str, rule1: f32, rule2: f32, rule3: f32) -> Result<(), String> {
+    stream_imp::load(model_dir, rule1, rule2, rule3)
+}
+
+/// Feeds one chunk of mono f32 PCM into the resident stream and decodes whatever
+/// is ready. Returns `(partial_text, is_endpoint)`; on an endpoint the stream is
+/// reset so the returned text is the final transcript for that utterance.
+#[cfg(target_os = "android")]
+pub fn stream_accept(
+    model_dir: &str,
+    samples: &[f32],
+    sample_rate: i32,
+) -> Result<(String, bool), String> {
+    stream_imp::accept(model_dir, samples, sample_rate)
+}
+
+/// Clears the resident stream's state, discarding any partial utterance.
+#[cfg(target_os = "android")]
+pub fn stream_reset(model_dir: &str) -> Result<(), String> {
+    stream_imp::reset(model_dir)
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn stream_load(_model_dir: &str, _rule1: f32, _rule2: f32, _rule3: f32) -> Result<(), String> {
+    Err("streaming ASR is only available on Android".to_owned())
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn stream_accept(
+    _model_dir: &str,
+    _samples: &[f32],
+    _sample_rate: i32,
+) -> Result<(String, bool), String> {
+    Err("streaming ASR is only available on Android".to_owned())
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn stream_reset(_model_dir: &str) -> Result<(), String> {
+    Err("streaming ASR is only available on Android".to_owned())
+}
+
 #[cfg(target_os = "android")]
 #[allow(dead_code)] // many config fields are part of the ABI but unused for SenseVoice
 mod imp {
@@ -384,5 +433,314 @@ mod imp {
         };
         unsafe { SherpaOnnxDestroyOfflineStream(stream) };
         Ok((text, lang))
+    }
+}
+
+#[cfg(target_os = "android")]
+#[allow(dead_code)] // several config fields are part of the ABI but unused here
+mod stream_imp {
+    use std::ffi::{CStr, CString};
+    use std::os::raw::{c_char, c_void};
+    use std::path::Path;
+    use std::sync::{Mutex, OnceLock};
+
+    // --- C struct mirrors (sherpa-onnx c-api.h v1.13.2). Order/types must match exactly. ---
+
+    #[repr(C)]
+    struct OnlineTransducerModelConfig {
+        encoder: *const c_char,
+        decoder: *const c_char,
+        joiner: *const c_char,
+    }
+    #[repr(C)]
+    struct OnlineParaformerModelConfig {
+        encoder: *const c_char,
+        decoder: *const c_char,
+    }
+    #[repr(C)]
+    struct OnlineZipformer2CtcModelConfig {
+        model: *const c_char,
+    }
+    #[repr(C)]
+    struct OnlineNemoCtcModelConfig {
+        model: *const c_char,
+    }
+    #[repr(C)]
+    struct OnlineToneCtcModelConfig {
+        model: *const c_char,
+    }
+    #[repr(C)]
+    struct OnlineModelConfig {
+        transducer: OnlineTransducerModelConfig,
+        paraformer: OnlineParaformerModelConfig,
+        zipformer2_ctc: OnlineZipformer2CtcModelConfig,
+        tokens: *const c_char,
+        num_threads: i32,
+        provider: *const c_char,
+        debug: i32,
+        model_type: *const c_char,
+        modeling_unit: *const c_char,
+        bpe_vocab: *const c_char,
+        tokens_buf: *const c_char,
+        tokens_buf_size: i32,
+        nemo_ctc: OnlineNemoCtcModelConfig,
+        t_one_ctc: OnlineToneCtcModelConfig,
+    }
+    #[repr(C)]
+    struct FeatureConfig {
+        sample_rate: i32,
+        feature_dim: i32,
+    }
+    #[repr(C)]
+    struct OnlineCtcFstDecoderConfig {
+        graph: *const c_char,
+        max_active: i32,
+    }
+    #[repr(C)]
+    struct HomophoneReplacerConfig {
+        dict_dir: *const c_char,
+        lexicon: *const c_char,
+        rule_fsts: *const c_char,
+    }
+    #[repr(C)]
+    struct OnlineRecognizerConfig {
+        feat_config: FeatureConfig,
+        model_config: OnlineModelConfig,
+        decoding_method: *const c_char,
+        max_active_paths: i32,
+        enable_endpoint: i32,
+        rule1_min_trailing_silence: f32,
+        rule2_min_trailing_silence: f32,
+        rule3_min_utterance_length: f32,
+        hotwords_file: *const c_char,
+        hotwords_score: f32,
+        ctc_fst_decoder_config: OnlineCtcFstDecoderConfig,
+        rule_fsts: *const c_char,
+        rule_fars: *const c_char,
+        blank_penalty: f32,
+        hotwords_buf: *const c_char,
+        hotwords_buf_size: i32,
+        hr: HomophoneReplacerConfig,
+    }
+    #[repr(C)]
+    struct OnlineRecognizerResult {
+        text: *const c_char,
+        tokens: *const c_char,
+        tokens_arr: *const *const c_char,
+        timestamps: *const f32,
+        count: i32,
+        json: *const c_char,
+    }
+
+    extern "C" {
+        fn SherpaOnnxCreateOnlineRecognizer(config: *const OnlineRecognizerConfig) -> *const c_void;
+        fn SherpaOnnxDestroyOnlineRecognizer(recognizer: *const c_void);
+        fn SherpaOnnxCreateOnlineStream(recognizer: *const c_void) -> *const c_void;
+        fn SherpaOnnxDestroyOnlineStream(stream: *const c_void);
+        fn SherpaOnnxOnlineStreamAcceptWaveform(
+            stream: *const c_void,
+            sample_rate: i32,
+            samples: *const f32,
+            n: i32,
+        );
+        fn SherpaOnnxIsOnlineStreamReady(
+            recognizer: *const c_void,
+            stream: *const c_void,
+        ) -> i32;
+        fn SherpaOnnxDecodeOnlineStream(recognizer: *const c_void, stream: *const c_void);
+        fn SherpaOnnxGetOnlineStreamResult(
+            recognizer: *const c_void,
+            stream: *const c_void,
+        ) -> *const OnlineRecognizerResult;
+        fn SherpaOnnxDestroyOnlineRecognizerResult(r: *const OnlineRecognizerResult);
+        fn SherpaOnnxOnlineStreamReset(recognizer: *const c_void, stream: *const c_void);
+        fn SherpaOnnxOnlineStreamIsEndpoint(
+            recognizer: *const c_void,
+            stream: *const c_void,
+        ) -> i32;
+    }
+
+    /// Endpoint rules (seconds), baked into the recognizer at creation.
+    #[derive(Clone, Copy, PartialEq)]
+    struct EndpointRules {
+        rule1: f32, // min trailing silence before anything is decoded
+        rule2: f32, // min trailing silence after speech (ends a turn)
+        rule3: f32, // max utterance length (force-cut)
+    }
+
+    impl Default for EndpointRules {
+        fn default() -> Self {
+            EndpointRules { rule1: 2.4, rule2: 1.2, rule3: 20.0 }
+        }
+    }
+
+    /// Resident streaming recognizer plus its single live stream. Both are raw
+    /// sherpa pointers (not auto-`Send`); all access is serialized through
+    /// `ENGINE`'s `Mutex`, which makes single-owner cross-thread use sound.
+    struct StreamEngine {
+        model_dir: String,
+        rules: EndpointRules,
+        recognizer: *const c_void,
+        stream: *const c_void,
+    }
+
+    unsafe impl Send for StreamEngine {}
+
+    impl Drop for StreamEngine {
+        fn drop(&mut self) {
+            unsafe {
+                SherpaOnnxDestroyOnlineStream(self.stream);
+                SherpaOnnxDestroyOnlineRecognizer(self.recognizer);
+            }
+        }
+    }
+
+    static ENGINE: OnceLock<Mutex<Option<StreamEngine>>> = OnceLock::new();
+
+    fn engine_cell() -> &'static Mutex<Option<StreamEngine>> {
+        ENGINE.get_or_init(|| Mutex::new(None))
+    }
+
+    fn create_engine(model_dir: &str, rules: EndpointRules) -> Result<StreamEngine, String> {
+        let dir = Path::new(model_dir);
+        let encoder_path = dir.join("encoder.int8.onnx");
+        let decoder_path = dir.join("decoder.int8.onnx");
+        let joiner_path = dir.join("joiner.int8.onnx");
+        let tokens_path = dir.join("tokens.txt");
+        for p in [&encoder_path, &decoder_path, &joiner_path, &tokens_path] {
+            if std::fs::File::open(p).is_err() {
+                return Err(format!("cannot open {}", p.display()));
+            }
+        }
+
+        let encoder = CString::new(encoder_path.to_string_lossy().into_owned()).map_err(|e| e.to_string())?;
+        let decoder = CString::new(decoder_path.to_string_lossy().into_owned()).map_err(|e| e.to_string())?;
+        let joiner = CString::new(joiner_path.to_string_lossy().into_owned()).map_err(|e| e.to_string())?;
+        let tokens = CString::new(tokens_path.to_string_lossy().into_owned()).map_err(|e| e.to_string())?;
+        let provider = CString::new("cpu").unwrap();
+        let decoding = CString::new("greedy_search").unwrap();
+
+        let mut cfg: OnlineRecognizerConfig = unsafe { std::mem::zeroed() };
+        // feature_dim is read from the encoder's metadata for this model; the
+        // value here is a placeholder that sherpa overrides.
+        cfg.feat_config.sample_rate = 16000;
+        cfg.feat_config.feature_dim = 80;
+        cfg.model_config.transducer.encoder = encoder.as_ptr();
+        cfg.model_config.transducer.decoder = decoder.as_ptr();
+        cfg.model_config.transducer.joiner = joiner.as_ptr();
+        cfg.model_config.tokens = tokens.as_ptr();
+        cfg.model_config.num_threads = 2;
+        cfg.model_config.provider = provider.as_ptr();
+        cfg.model_config.debug = 1;
+        // model_type left empty: sherpa auto-detects the transducer flavor from
+        // the encoder metadata (the streaming nemotron model needs no flag).
+        cfg.decoding_method = decoding.as_ptr();
+        cfg.enable_endpoint = 1;
+        cfg.rule1_min_trailing_silence = rules.rule1;
+        cfg.rule2_min_trailing_silence = rules.rule2;
+        cfg.rule3_min_utterance_length = rules.rule3;
+
+        let recognizer = unsafe { SherpaOnnxCreateOnlineRecognizer(&cfg) };
+        if recognizer.is_null() {
+            return Err("SherpaOnnxCreateOnlineRecognizer returned null".to_owned());
+        }
+        let stream = unsafe { SherpaOnnxCreateOnlineStream(recognizer) };
+        if stream.is_null() {
+            unsafe { SherpaOnnxDestroyOnlineRecognizer(recognizer) };
+            return Err("SherpaOnnxCreateOnlineStream returned null".to_owned());
+        }
+        Ok(StreamEngine {
+            model_dir: model_dir.to_owned(),
+            rules,
+            recognizer,
+            stream,
+        })
+    }
+
+    /// Loads the engine, recreating it when `model_dir` or the endpoint `rules`
+    /// differ from what is resident (rules are immutable post-creation).
+    fn ensure_loaded<'a>(
+        guard: &'a mut Option<StreamEngine>,
+        model_dir: &str,
+        rules: EndpointRules,
+    ) -> Result<&'a StreamEngine, String> {
+        let stale = match guard.as_ref() {
+            Some(e) => e.model_dir != model_dir || e.rules != rules,
+            None => true,
+        };
+        if stale {
+            *guard = Some(create_engine(model_dir, rules)?);
+        }
+        Ok(guard.as_ref().expect("engine just loaded"))
+    }
+
+    /// Reuses the resident engine for `model_dir`, or creates one with default
+    /// rules if none is loaded yet (a fallback; callers normally `load` first).
+    fn ensure_any<'a>(
+        guard: &'a mut Option<StreamEngine>,
+        model_dir: &str,
+    ) -> Result<&'a StreamEngine, String> {
+        let rules = guard.as_ref().map_or_else(EndpointRules::default, |e| e.rules);
+        ensure_loaded(guard, model_dir, rules)
+    }
+
+    pub fn load(model_dir: &str, rule1: f32, rule2: f32, rule3: f32) -> Result<(), String> {
+        let mut guard = engine_cell().lock().map_err(|e| e.to_string())?;
+        ensure_loaded(&mut guard, model_dir, EndpointRules { rule1, rule2, rule3 })?;
+        Ok(())
+    }
+
+    unsafe fn cstr(p: *const c_char) -> String {
+        if p.is_null() {
+            String::new()
+        } else {
+            CStr::from_ptr(p).to_string_lossy().into_owned()
+        }
+    }
+
+    pub fn accept(
+        model_dir: &str,
+        samples: &[f32],
+        sample_rate: i32,
+    ) -> Result<(String, bool), String> {
+        let mut guard = engine_cell().lock().map_err(|e| e.to_string())?;
+        let engine = ensure_any(&mut guard, model_dir)?;
+        let (recognizer, stream) = (engine.recognizer, engine.stream);
+
+        unsafe {
+            SherpaOnnxOnlineStreamAcceptWaveform(
+                stream,
+                sample_rate,
+                samples.as_ptr(),
+                samples.len() as i32,
+            );
+            while SherpaOnnxIsOnlineStreamReady(recognizer, stream) != 0 {
+                SherpaOnnxDecodeOnlineStream(recognizer, stream);
+            }
+        }
+
+        let res = unsafe { SherpaOnnxGetOnlineStreamResult(recognizer, stream) };
+        let text = if res.is_null() {
+            String::new()
+        } else {
+            let t = unsafe { cstr((*res).text) };
+            unsafe { SherpaOnnxDestroyOnlineRecognizerResult(res) };
+            t
+        };
+
+        let is_endpoint = unsafe { SherpaOnnxOnlineStreamIsEndpoint(recognizer, stream) } != 0;
+        if is_endpoint {
+            // Reset so the next chunk begins a fresh utterance; the text above is
+            // the finalized transcript for the segment just ended.
+            unsafe { SherpaOnnxOnlineStreamReset(recognizer, stream) };
+        }
+        Ok((text, is_endpoint))
+    }
+
+    pub fn reset(model_dir: &str) -> Result<(), String> {
+        let mut guard = engine_cell().lock().map_err(|e| e.to_string())?;
+        let engine = ensure_any(&mut guard, model_dir)?;
+        unsafe { SherpaOnnxOnlineStreamReset(engine.recognizer, engine.stream) };
+        Ok(())
     }
 }

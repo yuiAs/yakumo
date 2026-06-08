@@ -35,6 +35,7 @@ import app.rly3h.yakumo.BuildConfig
 import app.rly3h.yakumo.data.ModelCancelled
 import app.rly3h.yakumo.data.Models
 import app.rly3h.yakumo.data.Settings
+import app.rly3h.yakumo.ui.session.EndpointBounds
 import app.rly3h.yakumo.ui.session.VadBounds
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -61,6 +62,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 
   var rate by remember { mutableStateOf(settings.speechRate) }
   var autoSpeak by remember { mutableStateOf(settings.autoSpeak) }
+  var streamingAsr by remember { mutableStateOf(settings.streamingAsr) }
   var modelStatus by remember { mutableStateOf(modelLine()) }
   var engineStatus by remember { mutableStateOf("not loaded (first use loads them)") }
   var busy by remember { mutableStateOf(false) }
@@ -70,6 +72,10 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
   var downloading by remember { mutableStateOf(false) }
   var dlProgress by remember { mutableStateOf("") }
   val cancelFlag = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+
+  var epRule1 by remember { mutableStateOf(settings.endpointRule1) }
+  var epRule2 by remember { mutableStateOf(settings.endpointRule2) }
+  var epRule3 by remember { mutableStateOf(settings.endpointRule3) }
 
   var vadThresh by remember { mutableStateOf(settings.vadThreshold) }
   var vadHang by remember { mutableStateOf(settings.vadHangMs.toFloat()) }
@@ -118,7 +124,9 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         scope.launch {
           try {
             withContext(Dispatchers.IO) {
-              for (id in ids) {
+              // The experimental streaming model is large and opt-in; it has its
+              // own button below rather than riding on "download all".
+              for (id in ids.filter { it != "asr_stream" }) {
                 Models.ensure(context, id, onProgress = { dlProgress = it }, cancel = { cancelFlag.get() })
               }
             }
@@ -186,6 +194,68 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
       vadHang = settings.vadHangMs.toFloat()
       vadMin = settings.vadMinVoicedMs.toFloat()
       vadMax = settings.vadMaxSegMs.toFloat()
+    }) { Text("Reset to defaults") }
+
+    HorizontalDivider()
+
+    SectionTitle("Experimental")
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+      Text("Streaming English ASR (nemotron)", style = MaterialTheme.typography.bodyMedium)
+      Switch(
+        checked = streamingAsr,
+        onCheckedChange = {
+          streamingAsr = it
+          settings.streamingAsr = it
+        },
+      )
+    }
+    Text(
+      "Live, low-latency transcripts for the EN→JA flow. English only — leave off for Japanese input. Needs the streaming model below.",
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.outline,
+    )
+    Button(
+      enabled = !busy && !downloading,
+      onClick = {
+        downloading = true
+        cancelFlag.set(false)
+        dlProgress = "Starting…"
+        scope.launch {
+          try {
+            withContext(Dispatchers.IO) {
+              Models.ensure(context, "asr_stream", onProgress = { dlProgress = it }, cancel = { cancelFlag.get() })
+            }
+            modelStatus = modelLine()
+          } catch (c: ModelCancelled) {
+            modelStatus = "Download cancelled"
+          } catch (e: Throwable) {
+            modelStatus = "Error: ${e.message}"
+          } finally {
+            downloading = false
+          }
+        }
+      },
+    ) { Text("Download streaming model (~464 MB)") }
+
+    Text(
+      "End of turn — how the streaming recognizer splits utterances. Applies to the next session; changing these reloads the model.",
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.outline,
+    )
+    VadSlider("Silence to end a turn", epRule2, EndpointBounds.rule2, { "%.1f s".format(it) }, { epRule2 = it }) {
+      settings.endpointRule2 = epRule2
+    }
+    VadSlider("Silence before speech", epRule1, EndpointBounds.rule1, { "%.1f s".format(it) }, { epRule1 = it }) {
+      settings.endpointRule1 = epRule1
+    }
+    VadSlider("Max utterance length", epRule3, EndpointBounds.rule3, { "${it.toInt()} s" }, { epRule3 = it }) {
+      settings.endpointRule3 = epRule3
+    }
+    TextButton(onClick = {
+      settings.resetEndpoint()
+      epRule1 = settings.endpointRule1
+      epRule2 = settings.endpointRule2
+      epRule3 = settings.endpointRule3
     }) { Text("Reset to defaults") }
 
     HorizontalDivider()

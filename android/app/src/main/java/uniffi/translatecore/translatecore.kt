@@ -727,6 +727,12 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -746,6 +752,12 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_translatecore_fn_func_asr_recognize(`modelDir`: RustBuffer.ByValue,`pcm16le`: RustBuffer.ByValue,`sampleRate`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_translatecore_fn_func_asr_stream_accept(`modelDir`: RustBuffer.ByValue,`pcm16le`: RustBuffer.ByValue,`sampleRate`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_translatecore_fn_func_asr_stream_load(`modelDir`: RustBuffer.ByValue,`rule1`: Float,`rule2`: Float,`rule3`: Float,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_translatecore_fn_func_asr_stream_reset(`modelDir`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_translatecore_fn_func_core_version(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_translatecore_fn_func_greeting(`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -874,6 +886,12 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_translatecore_checksum_func_asr_recognize(
     ): Short
+    fun uniffi_translatecore_checksum_func_asr_stream_accept(
+    ): Short
+    fun uniffi_translatecore_checksum_func_asr_stream_load(
+    ): Short
+    fun uniffi_translatecore_checksum_func_asr_stream_reset(
+    ): Short
     fun uniffi_translatecore_checksum_func_core_version(
     ): Short
     fun uniffi_translatecore_checksum_func_greeting(
@@ -907,6 +925,15 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_translatecore_checksum_func_asr_recognize() != 500.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_translatecore_checksum_func_asr_stream_accept() != 37515.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_translatecore_checksum_func_asr_stream_load() != 39352.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_translatecore_checksum_func_asr_stream_reset() != 19843.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_translatecore_checksum_func_core_version() != 32937.toShort()) {
@@ -994,6 +1021,52 @@ public object FfiConverterInt: FfiConverter<Int, Int> {
 
     override fun write(value: Int, buf: ByteBuffer) {
         buf.putInt(value)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterFloat: FfiConverter<Float, Float> {
+    override fun lift(value: Float): Float {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Float {
+        return buf.getFloat()
+    }
+
+    override fun lower(value: Float): Float {
+        return value
+    }
+
+    override fun allocationSize(value: Float) = 4UL
+
+    override fun write(value: Float, buf: ByteBuffer) {
+        buf.putFloat(value)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterBoolean: FfiConverter<Boolean, Byte> {
+    override fun lift(value: Byte): Boolean {
+        return value.toInt() != 0
+    }
+
+    override fun read(buf: ByteBuffer): Boolean {
+        return lift(buf.get())
+    }
+
+    override fun lower(value: Boolean): Byte {
+        return if (value) 1.toByte() else 0.toByte()
+    }
+
+    override fun allocationSize(value: Boolean) = 1UL
+
+    override fun write(value: Boolean, buf: ByteBuffer) {
+        buf.put(lower(value))
     }
 }
 
@@ -1106,6 +1179,43 @@ public object FfiConverterTypeAsrResult: FfiConverterRustBuffer<AsrResult> {
     override fun write(value: AsrResult, buf: ByteBuffer) {
             FfiConverterString.write(value.`text`, buf)
             FfiConverterString.write(value.`lang`, buf)
+    }
+}
+
+
+
+/**
+ * Partial transcript from the streaming recognizer plus whether sherpa detected
+ * an end-of-utterance on this chunk. On `endpoint`, `text` is the finalized
+ * transcript for the segment that just ended and the stream has been reset.
+ */
+data class AsrStreamResult (
+    var `text`: kotlin.String, 
+    var `endpoint`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeAsrStreamResult: FfiConverterRustBuffer<AsrStreamResult> {
+    override fun read(buf: ByteBuffer): AsrStreamResult {
+        return AsrStreamResult(
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: AsrStreamResult) = (
+            FfiConverterString.allocationSize(value.`text`) +
+            FfiConverterBoolean.allocationSize(value.`endpoint`)
+    )
+
+    override fun write(value: AsrStreamResult, buf: ByteBuffer) {
+            FfiConverterString.write(value.`text`, buf)
+            FfiConverterBoolean.write(value.`endpoint`, buf)
     }
 }
 
@@ -1253,6 +1363,49 @@ public object FfiConverterTypeTranslateError : FfiConverterRustBuffer<TranslateE
 }
     )
     }
+    
+
+        /**
+         * Feeds one chunk of 16 kHz mono PCM (signed 16-bit little-endian) into the
+         * resident streaming recognizer and returns the current partial transcript and
+         * whether an utterance just ended. Loads the recognizer on first use.
+         */
+    @Throws(AsrException::class) fun `asrStreamAccept`(`modelDir`: kotlin.String, `pcm16le`: kotlin.ByteArray, `sampleRate`: kotlin.Int): AsrStreamResult {
+            return FfiConverterTypeAsrStreamResult.lift(
+    uniffiRustCallWithError(AsrException) { _status ->
+    UniffiLib.INSTANCE.uniffi_translatecore_fn_func_asr_stream_accept(
+        FfiConverterString.lower(`modelDir`),FfiConverterByteArray.lower(`pcm16le`),FfiConverterInt.lower(`sampleRate`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Loads the streaming (nemotron-en) recognizer under `model_dir` and creates its
+         * resident stream. `rule1`/`rule2`/`rule3` are the endpoint rules in seconds
+         * (trailing silence before / after decoded speech, and max utterance length);
+         * the recognizer is recreated when they change. Idempotent for equal arguments.
+         */
+    @Throws(AsrException::class) fun `asrStreamLoad`(`modelDir`: kotlin.String, `rule1`: kotlin.Float, `rule2`: kotlin.Float, `rule3`: kotlin.Float)
+        = 
+    uniffiRustCallWithError(AsrException) { _status ->
+    UniffiLib.INSTANCE.uniffi_translatecore_fn_func_asr_stream_load(
+        FfiConverterString.lower(`modelDir`),FfiConverterFloat.lower(`rule1`),FfiConverterFloat.lower(`rule2`),FfiConverterFloat.lower(`rule3`),_status)
+}
+    
+    
+
+        /**
+         * Discards any in-progress utterance in the resident stream (e.g. when the user
+         * stops recording).
+         */
+    @Throws(AsrException::class) fun `asrStreamReset`(`modelDir`: kotlin.String)
+        = 
+    uniffiRustCallWithError(AsrException) { _status ->
+    UniffiLib.INSTANCE.uniffi_translatecore_fn_func_asr_stream_reset(
+        FfiConverterString.lower(`modelDir`),_status)
+}
+    
     
 
         /**

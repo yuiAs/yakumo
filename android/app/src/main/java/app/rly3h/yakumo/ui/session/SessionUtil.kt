@@ -50,6 +50,23 @@ object VadBounds {
   val maxSegMs = 5000f..30000f
 }
 
+/**
+ * Endpoint rules for the streaming recognizer (seconds). These map to sherpa's
+ * rule1/2/3 and are baked into the recognizer at creation. `rule2` (trailing
+ * silence after speech) is the main "end of turn" knob.
+ */
+data class EndpointParams(
+  val rule1: Float = 2.4f, // trailing silence before any speech is decoded
+  val rule2: Float = 1.2f, // trailing silence after speech -> ends a turn
+  val rule3: Float = 20.0f, // max utterance length, force-cut
+)
+
+object EndpointBounds {
+  val rule1 = 0.5f..5.0f
+  val rule2 = 0.3f..3.0f
+  val rule3 = 5.0f..30.0f
+}
+
 private fun ShortArray.rms(n: Int): Double {
   var sum = 0.0
   for (i in 0 until n) {
@@ -133,6 +150,42 @@ internal fun captureLoop(
       if (speaking && voicedMs + silentMs >= vad.maxSegMs) cut()
     }
     if (speaking) cut() // flush the final segment on stop
+  } finally {
+    record.stop()
+    record.release()
+  }
+}
+
+private const val STREAM_CHUNK_SAMPLES = 1600 // 100 ms at 16 kHz
+
+/**
+ * Continuous capture for the streaming recognizer: emits fixed ~100 ms PCM16
+ * chunks until `running` goes false. No VAD here — the online recognizer does
+ * its own endpoint detection on the decoded stream. Blocking — run on IO.
+ */
+internal fun streamingCaptureLoop(
+  running: java.util.concurrent.atomic.AtomicBoolean,
+  emit: (ByteArray) -> Unit,
+) {
+  val minBuf = AudioRecord.getMinBufferSize(
+    SAMPLE_RATE,
+    AudioFormat.CHANNEL_IN_MONO,
+    AudioFormat.ENCODING_PCM_16BIT,
+  )
+  val record = AudioRecord(
+    MediaRecorder.AudioSource.VOICE_RECOGNITION,
+    SAMPLE_RATE,
+    AudioFormat.CHANNEL_IN_MONO,
+    AudioFormat.ENCODING_PCM_16BIT,
+    maxOf(minBuf, SAMPLE_RATE * 2),
+  )
+  val frame = ShortArray(STREAM_CHUNK_SAMPLES)
+  try {
+    record.startRecording()
+    while (running.get()) {
+      val n = record.read(frame, 0, frame.size)
+      if (n > 0) emit(frameToLeBytes(frame, n))
+    }
   } finally {
     record.stop()
     record.release()

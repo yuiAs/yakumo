@@ -1,6 +1,7 @@
 package app.rly3h.yakumo.data
 
 import android.content.Context
+import app.rly3h.yakumo.ui.session.EndpointParams
 import app.rly3h.yakumo.ui.session.VadParams
 
 /** Lightweight user settings backed by SharedPreferences (no extra deps). */
@@ -14,6 +15,12 @@ class Settings(context: Context) {
   var autoSpeak: Boolean
     get() = prefs.getBoolean(KEY_AUTO_SPEAK, true)
     set(v) = prefs.edit().putBoolean(KEY_AUTO_SPEAK, v).apply()
+
+  // Experimental: use the streaming (nemotron-en) recognizer for live partial
+  // transcripts. English-only; off by default so the SenseVoice JA path is kept.
+  var streamingAsr: Boolean
+    get() = prefs.getBoolean(KEY_STREAMING_ASR, false)
+    set(v) = prefs.edit().putBoolean(KEY_STREAMING_ASR, v).apply()
 
   // --- VAD knobs (defaults come from VadParams) ---
   private val def = VadParams()
@@ -50,12 +57,41 @@ class Settings(context: Context) {
     vadMaxSegMs = def.maxSegMs
   }
 
+  // --- Streaming endpoint rules (defaults come from EndpointParams) ---
+  private val epDef = EndpointParams()
+
+  var endpointRule1: Float
+    get() = prefs.getFloat(KEY_EP_RULE1, epDef.rule1)
+    set(v) = prefs.edit().putFloat(KEY_EP_RULE1, v).apply()
+
+  var endpointRule2: Float
+    get() = prefs.getFloat(KEY_EP_RULE2, epDef.rule2)
+    set(v) = prefs.edit().putFloat(KEY_EP_RULE2, v).apply()
+
+  var endpointRule3: Float
+    get() = prefs.getFloat(KEY_EP_RULE3, epDef.rule3)
+    set(v) = prefs.edit().putFloat(KEY_EP_RULE3, v).apply()
+
+  fun endpointParams(): EndpointParams =
+    EndpointParams(rule1 = endpointRule1, rule2 = endpointRule2, rule3 = endpointRule3)
+
+  /** Restores the endpoint rules to their defaults. */
+  fun resetEndpoint() {
+    endpointRule1 = epDef.rule1
+    endpointRule2 = epDef.rule2
+    endpointRule3 = epDef.rule3
+  }
+
   private companion object {
     const val KEY_RATE = "speechRate"
     const val KEY_AUTO_SPEAK = "autoSpeak"
+    const val KEY_STREAMING_ASR = "streamingAsr"
     const val KEY_VAD_THRESH = "vadThreshold"
     const val KEY_VAD_HANG = "vadHangMs"
     const val KEY_VAD_MIN = "vadMinVoicedMs"
     const val KEY_VAD_MAX = "vadMaxSegMs"
+    const val KEY_EP_RULE1 = "endpointRule1"
+    const val KEY_EP_RULE2 = "endpointRule2"
+    const val KEY_EP_RULE3 = "endpointRule3"
   }
 }
