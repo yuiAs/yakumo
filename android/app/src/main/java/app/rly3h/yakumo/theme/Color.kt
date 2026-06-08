@@ -1,4 +1,4 @@
-package com.example.offlinetranslate.theme
+package app.rly3h.yakumo.theme
 
 import androidx.compose.ui.graphics.Color
 

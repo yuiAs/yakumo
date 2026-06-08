@@ -1,4 +1,4 @@
-package com.example.offlinetranslate.theme
+package app.rly3h.yakumo.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle

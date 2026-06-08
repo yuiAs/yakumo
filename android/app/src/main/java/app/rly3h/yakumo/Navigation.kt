@@ -1,4 +1,4 @@
-package com.example.offlinetranslate
+package app.rly3h.yakumo
 
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -26,10 +26,10 @@ import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
-import com.example.offlinetranslate.ui.history.HistoryDetailScreen
-import com.example.offlinetranslate.ui.history.SessionHistoryScreen
-import com.example.offlinetranslate.ui.session.NewSessionScreen
-import com.example.offlinetranslate.ui.settings.SettingsScreen
+import app.rly3h.yakumo.ui.history.HistoryDetailScreen
+import app.rly3h.yakumo.ui.history.SessionHistoryScreen
+import app.rly3h.yakumo.ui.session.NewSessionScreen
+import app.rly3h.yakumo.ui.settings.SettingsScreen
 import kotlinx.coroutines.launch
 
 @Composable

@@ -1,4 +1,4 @@
-package com.example.offlinetranslate
+package app.rly3h.yakumo
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -8,7 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
-import com.example.offlinetranslate.theme.OfflineTranslateTheme
+import app.rly3h.yakumo.theme.OfflineTranslateTheme
 
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {

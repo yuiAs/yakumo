@@ -1,4 +1,4 @@
-package com.example.offlinetranslate.data
+package app.rly3h.yakumo.data
 
 import android.content.Context
 

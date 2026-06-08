@@ -1,4 +1,4 @@
-package com.example.offlinetranslate.theme
+package app.rly3h.yakumo.theme
 
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme

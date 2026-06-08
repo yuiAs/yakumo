@@ -1,4 +1,4 @@
-package com.example.offlinetranslate.ui.session
+package app.rly3h.yakumo.ui.session
 
 import android.media.AudioFormat
 import android.media.AudioRecord

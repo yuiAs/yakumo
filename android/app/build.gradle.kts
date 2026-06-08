@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.offlinetranslate"
+    namespace = "app.rly3h.yakumo"
     compileSdk = 36
     defaultConfig {
         applicationId = "app.rly3h.yakumo"

@@ -1,4 +1,4 @@
-package com.example.offlinetranslate
+package app.rly3h.yakumo
 
 import androidx.navigation3.runtime.NavKey
 import kotlinx.serialization.Serializable

@@ -1,4 +1,4 @@
-package com.example.offlinetranslate.ui.settings
+package app.rly3h.yakumo.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -26,8 +26,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Row
-import com.example.offlinetranslate.data.Models
-import com.example.offlinetranslate.data.Settings
+import app.rly3h.yakumo.data.Models
+import app.rly3h.yakumo.data.Settings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext

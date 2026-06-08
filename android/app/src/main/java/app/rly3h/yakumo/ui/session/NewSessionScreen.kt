@@ -1,4 +1,4 @@
-package com.example.offlinetranslate.ui.session
+package app.rly3h.yakumo.ui.session
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -33,11 +33,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import com.example.offlinetranslate.data.LoggedUtterance
-import com.example.offlinetranslate.data.Models
-import com.example.offlinetranslate.data.SessionLog
-import com.example.offlinetranslate.data.SessionStore
-import com.example.offlinetranslate.data.Settings
+import app.rly3h.yakumo.data.LoggedUtterance
+import app.rly3h.yakumo.data.Models
+import app.rly3h.yakumo.data.SessionLog
+import app.rly3h.yakumo.data.SessionStore
+import app.rly3h.yakumo.data.Settings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
