@@ -38,8 +38,8 @@ private const val PRE_FRAMES = 10 // ~200 ms pre-roll so onsets aren't clipped
 data class VadParams(
   val thresholdRms: Double = 600.0, // int16 RMS; above = voiced
   val hangMs: Int = 1000, // trailing silence that ends a segment
-  val minVoicedMs: Int = 250, // ignore blips shorter than this
-  val maxSegMs: Int = 15000, // force-cut very long utterances
+  val minVoicedMs: Int = 500, // ignore blips shorter than this
+  val maxSegMs: Int = 8000, // force-cut very long utterances
 )
 
 // Sensible, processing-appropriate bounds for the Settings sliders.
