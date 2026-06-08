@@ -7,7 +7,6 @@ uniffi::setup_scaffolding!();
 
 mod asr;
 mod translate;
-mod tts;
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum TranslateError {
@@ -81,51 +80,6 @@ pub fn asr_recognize(
         .collect();
     let (text, lang) = asr::recognize(&model_dir, &samples, sample_rate).map_err(AsrError::Failed)?;
     Ok(AsrResult { text, lang })
-}
-
-/// Result of a TTS synthesis: the written WAV plus basic audio metadata.
-#[derive(uniffi::Record)]
-pub struct TtsResult {
-    pub sample_rate: i32,
-    pub num_samples: i32,
-    pub wav_path: String,
-}
-
-#[derive(Debug, thiserror::Error, uniffi::Error)]
-pub enum TtsError {
-    #[error("{0}")]
-    Failed(String),
-}
-
-/// Loads the Kokoro TTS handle under `model_dir` into the resident engine
-/// without synthesizing, to warm it up. `lang` is the espeak-ng language code
-/// ("ja" for Japanese; empty keeps the en/zh lexicon path). Idempotent per
-/// `(model_dir, lang)`.
-#[uniffi::export]
-pub fn tts_load(model_dir: String, lang: String) -> Result<(), TtsError> {
-    tts::load(&model_dir, &lang).map_err(TtsError::Failed)
-}
-
-/// Synthesizes `text` with the Kokoro model under `model_dir`, writing a WAV to
-/// `out_wav`. `speed` is the Kokoro generation rate (playback speed is applied
-/// separately in the UI layer). `lang` selects espeak-ng phonemization ("ja" for
-/// Japanese; empty = en/zh lexicon path). Loads on first use, then reuses it.
-#[uniffi::export]
-pub fn tts_synthesize(
-    model_dir: String,
-    text: String,
-    sid: i32,
-    speed: f32,
-    out_wav: String,
-    lang: String,
-) -> Result<TtsResult, TtsError> {
-    let (sample_rate, num_samples) =
-        tts::synthesize(&model_dir, &text, sid, speed, &out_wav, &lang).map_err(TtsError::Failed)?;
-    Ok(TtsResult {
-        sample_rate,
-        num_samples,
-        wav_path: out_wav,
-    })
 }
 
 /// Version banner for the native core. Used by the PoC to confirm the app is

@@ -727,10 +727,6 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
-
-
-
-
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -761,10 +757,6 @@ internal interface UniffiLib : Library {
     fun uniffi_translatecore_fn_func_translate_smoke(`ortDylib`: RustBuffer.ByValue,`modelPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_translatecore_fn_func_translate_text(`modelDir`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,`srcLang`: RustBuffer.ByValue,`tgtLang`: RustBuffer.ByValue,`ortDylib`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
-    fun uniffi_translatecore_fn_func_tts_load(`modelDir`: RustBuffer.ByValue,`lang`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): Unit
-    fun uniffi_translatecore_fn_func_tts_synthesize(`modelDir`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,`sid`: Int,`speed`: Float,`outWav`: RustBuffer.ByValue,`lang`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun ffi_translatecore_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -894,10 +886,6 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_translatecore_checksum_func_translate_text(
     ): Short
-    fun uniffi_translatecore_checksum_func_tts_load(
-    ): Short
-    fun uniffi_translatecore_checksum_func_tts_synthesize(
-    ): Short
     fun ffi_translatecore_uniffi_contract_version(
     ): Int
     
@@ -937,12 +925,6 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_translatecore_checksum_func_translate_text() != 13229.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_translatecore_checksum_func_tts_load() != 1404.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_translatecore_checksum_func_tts_synthesize() != 6434.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1012,29 +994,6 @@ public object FfiConverterInt: FfiConverter<Int, Int> {
 
     override fun write(value: Int, buf: ByteBuffer) {
         buf.putInt(value)
-    }
-}
-
-/**
- * @suppress
- */
-public object FfiConverterFloat: FfiConverter<Float, Float> {
-    override fun lift(value: Float): Float {
-        return value
-    }
-
-    override fun read(buf: ByteBuffer): Float {
-        return buf.getFloat()
-    }
-
-    override fun lower(value: Float): Float {
-        return value
-    }
-
-    override fun allocationSize(value: Float) = 4UL
-
-    override fun write(value: Float, buf: ByteBuffer) {
-        buf.putFloat(value)
     }
 }
 
@@ -1147,45 +1106,6 @@ public object FfiConverterTypeAsrResult: FfiConverterRustBuffer<AsrResult> {
     override fun write(value: AsrResult, buf: ByteBuffer) {
             FfiConverterString.write(value.`text`, buf)
             FfiConverterString.write(value.`lang`, buf)
-    }
-}
-
-
-
-/**
- * Result of a TTS synthesis: the written WAV plus basic audio metadata.
- */
-data class TtsResult (
-    var `sampleRate`: kotlin.Int, 
-    var `numSamples`: kotlin.Int, 
-    var `wavPath`: kotlin.String
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeTtsResult: FfiConverterRustBuffer<TtsResult> {
-    override fun read(buf: ByteBuffer): TtsResult {
-        return TtsResult(
-            FfiConverterInt.read(buf),
-            FfiConverterInt.read(buf),
-            FfiConverterString.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: TtsResult) = (
-            FfiConverterInt.allocationSize(value.`sampleRate`) +
-            FfiConverterInt.allocationSize(value.`numSamples`) +
-            FfiConverterString.allocationSize(value.`wavPath`)
-    )
-
-    override fun write(value: TtsResult, buf: ByteBuffer) {
-            FfiConverterInt.write(value.`sampleRate`, buf)
-            FfiConverterInt.write(value.`numSamples`, buf)
-            FfiConverterString.write(value.`wavPath`, buf)
     }
 }
 
@@ -1306,65 +1226,6 @@ public object FfiConverterTypeTranslateError : FfiConverterRustBuffer<TranslateE
     }
 
 }
-
-
-
-
-
-sealed class TtsException: kotlin.Exception() {
-    
-    class Failed(
-        
-        val v1: kotlin.String
-        ) : TtsException() {
-        override val message
-            get() = "v1=${ v1 }"
-    }
-    
-
-    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<TtsException> {
-        override fun lift(error_buf: RustBuffer.ByValue): TtsException = FfiConverterTypeTtsError.lift(error_buf)
-    }
-
-    
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeTtsError : FfiConverterRustBuffer<TtsException> {
-    override fun read(buf: ByteBuffer): TtsException {
-        
-
-        return when(buf.getInt()) {
-            1 -> TtsException.Failed(
-                FfiConverterString.read(buf),
-                )
-            else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
-        }
-    }
-
-    override fun allocationSize(value: TtsException): ULong {
-        return when(value) {
-            is TtsException.Failed -> (
-                // Add the size for the Int that specifies the variant plus the size needed for all fields
-                4UL
-                + FfiConverterString.allocationSize(value.v1)
-            )
-        }
-    }
-
-    override fun write(value: TtsException, buf: ByteBuffer) {
-        when(value) {
-            is TtsException.Failed -> {
-                buf.putInt(1)
-                FfiConverterString.write(value.v1, buf)
-                Unit
-            }
-        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
-    }
-
-}
         /**
          * Loads the SenseVoice recognizer under `model_dir` into the resident engine
          * without recognizing anything, to warm it up. Idempotent per `model_dir`.
@@ -1470,37 +1331,6 @@ public object FfiConverterTypeTtsError : FfiConverterRustBuffer<TtsException> {
     uniffiRustCallWithError(TranslateException) { _status ->
     UniffiLib.INSTANCE.uniffi_translatecore_fn_func_translate_text(
         FfiConverterString.lower(`modelDir`),FfiConverterString.lower(`text`),FfiConverterString.lower(`srcLang`),FfiConverterString.lower(`tgtLang`),FfiConverterString.lower(`ortDylib`),_status)
-}
-    )
-    }
-    
-
-        /**
-         * Loads the Kokoro TTS handle under `model_dir` into the resident engine
-         * without synthesizing, to warm it up. `lang` is the espeak-ng language code
-         * ("ja" for Japanese; empty keeps the en/zh lexicon path). Idempotent per
-         * `(model_dir, lang)`.
-         */
-    @Throws(TtsException::class) fun `ttsLoad`(`modelDir`: kotlin.String, `lang`: kotlin.String)
-        = 
-    uniffiRustCallWithError(TtsException) { _status ->
-    UniffiLib.INSTANCE.uniffi_translatecore_fn_func_tts_load(
-        FfiConverterString.lower(`modelDir`),FfiConverterString.lower(`lang`),_status)
-}
-    
-    
-
-        /**
-         * Synthesizes `text` with the Kokoro model under `model_dir`, writing a WAV to
-         * `out_wav`. `speed` is the Kokoro generation rate (playback speed is applied
-         * separately in the UI layer). `lang` selects espeak-ng phonemization ("ja" for
-         * Japanese; empty = en/zh lexicon path). Loads on first use, then reuses it.
-         */
-    @Throws(TtsException::class) fun `ttsSynthesize`(`modelDir`: kotlin.String, `text`: kotlin.String, `sid`: kotlin.Int, `speed`: kotlin.Float, `outWav`: kotlin.String, `lang`: kotlin.String): TtsResult {
-            return FfiConverterTypeTtsResult.lift(
-    uniffiRustCallWithError(TtsException) { _status ->
-    UniffiLib.INSTANCE.uniffi_translatecore_fn_func_tts_synthesize(
-        FfiConverterString.lower(`modelDir`),FfiConverterString.lower(`text`),FfiConverterInt.lower(`sid`),FfiConverterFloat.lower(`speed`),FfiConverterString.lower(`outWav`),FfiConverterString.lower(`lang`),_status)
 }
     )
     }
