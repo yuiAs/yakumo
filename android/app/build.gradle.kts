@@ -86,10 +86,6 @@ dependencies {
   // Rust core (UniFFI): generated Kotlin bindings call into libtranslatecore.so via JNA.
   implementation("net.java.dev.jna:jna:5.14.0@aar")
 
-  // Media3 (ExoPlayer successor): plays the synthesized WAV with variable speed.
-  implementation("androidx.media3:media3-exoplayer:1.5.1")
-  implementation("androidx.media3:media3-common:1.5.1")
-
   // Model provisioning: parse the JSON manifest + extract tar.bz2 archives in-app.
   implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
   implementation("org.apache.commons:commons-compress:1.27.1")
