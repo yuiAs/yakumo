@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Row
+import app.rly3h.yakumo.BuildConfig
 import app.rly3h.yakumo.data.Models
 import app.rly3h.yakumo.data.Settings
 import kotlinx.coroutines.Dispatchers
@@ -138,6 +139,10 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     HorizontalDivider()
 
     SectionTitle("About")
+    Text(
+      "やくも v${BuildConfig.VERSION_NAME} (${BuildConfig.GIT_HASH})",
+      style = MaterialTheme.typography.bodySmall,
+    )
     Text(remember { coreVersion() }, style = MaterialTheme.typography.bodySmall)
     Text(remember { sherpaVersion() }, style = MaterialTheme.typography.bodySmall)
   }

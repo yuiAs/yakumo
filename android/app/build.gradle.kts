@@ -4,6 +4,19 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
 }
 
+// Short git hash of the build, surfaced in Settings → About. "unknown" if git
+// is unavailable. Uses providers.exec so it stays configuration-cache safe
+// (a raw ProcessBuilder at configuration time is rejected by the CC).
+fun gitHash(): String =
+  try {
+    providers.exec {
+      commandLine("git", "rev-parse", "--short", "HEAD")
+      isIgnoreExitValue = true
+    }.standardOutput.asText.get().trim().ifEmpty { "unknown" }
+  } catch (e: Exception) {
+    "unknown"
+  }
+
 android {
     namespace = "app.rly3h.yakumo"
     compileSdk = 36
@@ -13,6 +26,7 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+        buildConfigField("String", "GIT_HASH", "\"${gitHash()}\"")
     }
 
     buildTypes {
@@ -28,7 +42,7 @@ android {
     buildFeatures {
       compose = true
       aidl = false
-      buildConfig = false
+      buildConfig = true
       shaders = false
     }
 
