@@ -32,10 +32,10 @@ internal fun labelForFlores(code: String): String = when {
 // after a short pause so it can be translated while the user keeps talking.
 private const val SAMPLE_RATE = 16000
 private const val FRAME_SAMPLES = 320 // 20 ms
-private const val VAD_THRESH = 700.0 // int16 RMS; above = voiced
-private const val VAD_HANG_MS = 700 // trailing silence that ends a segment
-private const val VAD_MIN_MS = 300 // ignore blips shorter than this
-private const val VAD_MAX_MS = 12000 // force-cut very long utterances
+private const val VAD_THRESH = 600.0 // int16 RMS; above = voiced
+private const val VAD_HANG_MS = 1000 // trailing silence that ends a segment
+private const val VAD_MIN_MS = 250 // ignore blips shorter than this
+private const val VAD_MAX_MS = 15000 // force-cut very long utterances
 private const val PRE_FRAMES = 10 // ~200 ms pre-roll so onsets aren't clipped
 
 private fun ShortArray.rms(n: Int): Double {
