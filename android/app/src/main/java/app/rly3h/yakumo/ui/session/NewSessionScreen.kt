@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.speech.tts.TextToSpeech
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,8 +18,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -101,6 +105,9 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
   var partial by remember { mutableStateOf("") } // live transcript (streaming mode)
   var recording by remember { mutableStateOf(false) }
   var autoSpeak by remember { mutableStateOf(settings.autoSpeak) }
+  // Conversation language pair + input-direction override (persisted).
+  var pair by remember { mutableStateOf(settings.languagePair()) }
+  var inputMode by remember { mutableStateOf(settings.inputMode) }
   val listState = rememberLazyListState()
   // Read from the capture thread, so an AtomicBoolean rather than Compose state.
   val running = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
@@ -140,9 +147,9 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
   // spoken. `lang` is the ASR language tag, empty for the English-only streaming
   // recognizer (then the script heuristic picks the direction).
   suspend fun finalizeTurn(transcript: String, lang: String) {
-    val src = floresFromAsrLang(lang)
-      ?: if (isJapanese(transcript)) "jpn_Jpan" else "eng_Latn"
-    val tgt = if (src == "jpn_Jpan") "eng_Latn" else "jpn_Jpan"
+    val (srcOpt, tgtOpt) = resolveDirection(pair, inputMode, lang, transcript)
+    val src = srcOpt.flores
+    val tgt = tgtOpt.flores
 
     val id = withContext(Dispatchers.Main) {
       val newId = nextId++
@@ -259,13 +266,34 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
   }
 
   Column(modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    // Direction header. Detection is per-utterance, so the pair is shown as auto.
+    // Google-Translate-style pair bar + per-utterance input override.
     Row(
       Modifier.fillMaxWidth().padding(top = 8.dp),
       horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      Text("EN ⇄ JA · auto", style = MaterialTheme.typography.labelLarge)
+      LanguageBar(
+        pair = pair,
+        onPick = { isA, opt ->
+          val next = if (isA) pair.copy(a = opt) else pair.copy(b = opt)
+          // Picking the same language on both sides is meaningless; swap instead.
+          pair = if (next.a == next.b) LanguagePair(pair.b, pair.a) else next
+          settings.langAFlores = pair.a.flores
+          settings.langBFlores = pair.b.flores
+        },
+        onSwap = {
+          pair = LanguagePair(pair.b, pair.a)
+          settings.langAFlores = pair.a.flores
+          settings.langBFlores = pair.b.flores
+          // Forced direction follows the side it was pinned to.
+          inputMode = when (inputMode) {
+            InputMode.FORCE_A -> InputMode.FORCE_B
+            InputMode.FORCE_B -> InputMode.FORCE_A
+            InputMode.AUTO -> InputMode.AUTO
+          }
+          settings.inputMode = inputMode
+        },
+      )
       FilterChip(
         selected = autoSpeak,
         onClick = {
@@ -275,6 +303,13 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
         label = { Text(if (autoSpeak) "🔊" else "🔇") },
       )
     }
+
+    // Input language: Auto-detect (default) or pin to one side of the pair.
+    InputModeChip(
+      pair = pair,
+      mode = inputMode,
+      onChange = { inputMode = it; settings.inputMode = it },
+    )
 
     // Conversation log: oldest at top, newest at the bottom (auto-scrolled).
     Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -323,6 +358,59 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
           )
         }
       }
+    }
+  }
+}
+
+// Pair bar: [A] ⇄ [B], each side a dropdown over LANGUAGES; the arrow swaps sides.
+@Composable
+private fun LanguageBar(
+  pair: LanguagePair,
+  onPick: (isA: Boolean, opt: LanguageOption) -> Unit,
+  onSwap: () -> Unit,
+) {
+  Row(
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    LanguagePickerChip(pair.a) { onPick(true, it) }
+    Text(
+      "⇄",
+      modifier = Modifier.clickable { onSwap() }.padding(horizontal = 4.dp),
+      style = MaterialTheme.typography.titleMedium,
+    )
+    LanguagePickerChip(pair.b) { onPick(false, it) }
+  }
+}
+
+@Composable
+private fun LanguagePickerChip(selected: LanguageOption, onPick: (LanguageOption) -> Unit) {
+  var open by remember { mutableStateOf(false) }
+  Box {
+    AssistChip(onClick = { open = true }, label = { Text(selected.label) })
+    DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+      LANGUAGES.forEach { opt ->
+        DropdownMenuItem(text = { Text(opt.label) }, onClick = { open = false; onPick(opt) })
+      }
+    }
+  }
+}
+
+// Input override: Auto detect (default) or pin the spoken side to A/B.
+@Composable
+private fun InputModeChip(pair: LanguagePair, mode: InputMode, onChange: (InputMode) -> Unit) {
+  var open by remember { mutableStateOf(false) }
+  val label = when (mode) {
+    InputMode.AUTO -> "Input: Auto"
+    InputMode.FORCE_A -> "Input: ${pair.a.label}"
+    InputMode.FORCE_B -> "Input: ${pair.b.label}"
+  }
+  Box {
+    AssistChip(onClick = { open = true }, label = { Text(label) })
+    DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+      DropdownMenuItem(text = { Text("Auto detect") }, onClick = { open = false; onChange(InputMode.AUTO) })
+      DropdownMenuItem(text = { Text(pair.a.label) }, onClick = { open = false; onChange(InputMode.FORCE_A) })
+      DropdownMenuItem(text = { Text(pair.b.label) }, onClick = { open = false; onChange(InputMode.FORCE_B) })
     }
   }
 }

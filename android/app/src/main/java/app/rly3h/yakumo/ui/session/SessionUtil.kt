@@ -9,23 +9,72 @@ import java.util.Locale
 internal fun isJapanese(text: String): Boolean =
   text.any { it in '぀'..'ヿ' || it in '一'..'鿿' }
 
-// SenseVoice tag ("<|en|>", "<|ja|>", ...) -> FLORES source code for the EN<->JA
-// pair. Null for other/empty tags so the caller falls back to the heuristic.
-internal fun floresFromAsrLang(lang: String): String? = when {
-  lang.contains("ja") -> "jpn_Jpan"
-  lang.contains("en") -> "eng_Latn"
-  else -> null
+/**
+ * A language the translation pair can be set to. The single source of truth for
+ * everything language-specific; supporting one more language is one more row.
+ *
+ * @param flores NLLB FLORES-200 code passed to the translator
+ * @param asrTag substring of the SenseVoice tag ("<|en|>" contains "en")
+ * @param label  full name shown in the picker
+ * @param short  two-letter badge shown on a turn card
+ * @param locale OS TTS locale used to read the translation aloud
+ */
+internal data class LanguageOption(
+  val flores: String,
+  val asrTag: String,
+  val label: String,
+  val short: String,
+  val locale: Locale,
+)
+
+// Currently EN<->JA only; both directions of every pair must be ASR-recognizable
+// (SenseVoice) and ideally TTS-speakable (OS). Add a row to widen the set.
+internal val LANGUAGES: List<LanguageOption> = listOf(
+  LanguageOption("eng_Latn", "en", "English", "EN", Locale.ENGLISH),
+  LanguageOption("jpn_Jpan", "ja", "Japanese", "JA", Locale.JAPANESE),
+)
+
+internal fun languageByFlores(flores: String): LanguageOption =
+  LANGUAGES.firstOrNull { it.flores == flores } ?: LANGUAGES.first()
+
+/** The two languages of a conversation; auto-swap translates between them. */
+internal data class LanguagePair(val a: LanguageOption, val b: LanguageOption)
+
+/** How the spoken side of the pair is chosen for an utterance. */
+internal enum class InputMode { AUTO, FORCE_A, FORCE_B }
+
+/**
+ * Decide (source, target) for one utterance in the bidirectional pair.
+ * AUTO detects which side was spoken (ASR tag first, kana/kanji script as a
+ * fallback) and translates to the other; FORCE_* overrides that detection.
+ * Unrecognized input defaults to a -> b.
+ */
+internal fun resolveDirection(
+  pair: LanguagePair,
+  mode: InputMode,
+  asrTag: String,
+  transcript: String,
+): Pair<LanguageOption, LanguageOption> = when (mode) {
+  InputMode.FORCE_A -> pair.a to pair.b
+  InputMode.FORCE_B -> pair.b to pair.a
+  InputMode.AUTO -> if (detectSide(pair, asrTag, transcript) == pair.b) pair.b to pair.a else pair.a to pair.b
 }
 
-// FLORES target code -> Locale for the OS TTS engine.
-internal fun localeFromFlores(code: String): Locale =
-  if (code.startsWith("jpn")) Locale.JAPANESE else Locale.ENGLISH
-
-internal fun labelForFlores(code: String): String = when {
-  code.startsWith("jpn") -> "JA"
-  code.startsWith("eng") -> "EN"
-  else -> code
+private fun detectSide(pair: LanguagePair, asrTag: String, transcript: String): LanguageOption {
+  // Trust the ASR tag when present, but only if it names a side of this pair.
+  if (asrTag.isNotBlank()) {
+    listOf(pair.a, pair.b).firstOrNull { asrTag.contains(it.asrTag) }?.let { return it }
+  }
+  // No usable tag (e.g. the English-only streaming recognizer): fall back to a
+  // script check, which can only distinguish Japanese.
+  val jp = listOf(pair.a, pair.b).firstOrNull { it.flores == "jpn_Jpan" }
+  return if (jp != null && isJapanese(transcript)) jp else pair.a
 }
+
+// FLORES code -> Locale for the OS TTS engine.
+internal fun localeFromFlores(code: String): Locale = languageByFlores(code).locale
+
+internal fun labelForFlores(code: String): String = languageByFlores(code).short
 
 // --- Energy-VAD continuous capture ---
 // 16 kHz mono; 20 ms frames. Tuned for assist-style conversation: cut a segment

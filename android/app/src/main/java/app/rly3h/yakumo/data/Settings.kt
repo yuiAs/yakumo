@@ -2,7 +2,10 @@ package app.rly3h.yakumo.data
 
 import android.content.Context
 import app.rly3h.yakumo.ui.session.EndpointParams
+import app.rly3h.yakumo.ui.session.InputMode
+import app.rly3h.yakumo.ui.session.LanguagePair
 import app.rly3h.yakumo.ui.session.VadParams
+import app.rly3h.yakumo.ui.session.languageByFlores
 
 /** Lightweight user settings backed by SharedPreferences (no extra deps). */
 class Settings(context: Context) {
@@ -21,6 +24,23 @@ class Settings(context: Context) {
   var streamingAsr: Boolean
     get() = prefs.getBoolean(KEY_STREAMING_ASR, false)
     set(v) = prefs.edit().putBoolean(KEY_STREAMING_ASR, v).apply()
+
+  // --- Conversation language pair + input override (FLORES codes / enum name) ---
+  var langAFlores: String
+    get() = prefs.getString(KEY_LANG_A, "eng_Latn")!!
+    set(v) = prefs.edit().putString(KEY_LANG_A, v).apply()
+
+  var langBFlores: String
+    get() = prefs.getString(KEY_LANG_B, "jpn_Jpan")!!
+    set(v) = prefs.edit().putString(KEY_LANG_B, v).apply()
+
+  internal var inputMode: InputMode
+    get() = runCatching { InputMode.valueOf(prefs.getString(KEY_INPUT_MODE, null)!!) }
+      .getOrDefault(InputMode.AUTO)
+    set(v) = prefs.edit().putString(KEY_INPUT_MODE, v.name).apply()
+
+  internal fun languagePair(): LanguagePair =
+    LanguagePair(languageByFlores(langAFlores), languageByFlores(langBFlores))
 
   // --- VAD knobs (defaults come from VadParams) ---
   private val def = VadParams()
@@ -86,6 +106,9 @@ class Settings(context: Context) {
     const val KEY_RATE = "speechRate"
     const val KEY_AUTO_SPEAK = "autoSpeak"
     const val KEY_STREAMING_ASR = "streamingAsr"
+    const val KEY_LANG_A = "langAFlores"
+    const val KEY_LANG_B = "langBFlores"
+    const val KEY_INPUT_MODE = "inputMode"
     const val KEY_VAD_THRESH = "vadThreshold"
     const val KEY_VAD_HANG = "vadHangMs"
     const val KEY_VAD_MIN = "vadMinVoicedMs"
