@@ -57,6 +57,40 @@ kotlin {
     jvmToolchain(17)
 }
 
+// ---- Rust core (libtranslatecore.so) --------------------------------------
+// Cross-compiled from ../../rust/core with cargo-ndk rather than committed, so
+// the ~190 MB build artifact stays out of the repo. The task drops one .so per
+// ABI into jniLibs, where AGP's jniLibs merge picks it up. Requires a Rust
+// toolchain + cargo-ndk + the android rustup targets (aarch64-linux-android,
+// x86_64-linux-android); see docs/architecture.md §8.
+val rustCoreDir = rootDir.parentFile.resolve("rust/core")
+val jniLibsDir = layout.projectDirectory.dir("src/main/jniLibs")
+val androidAbis = listOf("arm64-v8a", "x86_64")
+
+val cargoBuildRustCore = tasks.register<Exec>("cargoBuildRustCore") {
+    group = "build"
+    description = "Cross-compiles the Rust core into jniLibs via cargo-ndk."
+    workingDir = rustCoreDir // cargo-ndk resolves the crate from the cwd Cargo.toml
+
+    inputs.dir(rustCoreDir.resolve("src"))
+    inputs.file(rustCoreDir.resolve("Cargo.toml"))
+    inputs.file(rustCoreDir.resolve("Cargo.lock"))
+    inputs.file(rustCoreDir.resolve("build.rs"))
+    outputs.files(androidAbis.map { jniLibsDir.file("$it/libtranslatecore.so") })
+
+    // Exec inherits the parent environment, so cargo-ndk picks up ANDROID_NDK_HOME
+    // (or ANDROID_HOME/ndk) on its own — no SDK path to thread through here.
+    commandLine = buildList {
+        add("cargo"); add("ndk")
+        androidAbis.forEach { add("-t"); add(it) }
+        add("-o"); add(jniLibsDir.asFile.absolutePath)
+        add("build"); add("--release")
+    }
+}
+
+// preBuild gates every variant task, so the .so exists before the jniLibs merge.
+tasks.named("preBuild") { dependsOn(cargoBuildRustCore) }
+
 dependencies {
   val composeBom = platform(libs.androidx.compose.bom)
   implementation(composeBom)

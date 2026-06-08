@@ -1,1 +1,4 @@
 /build
+
+# Built by the cargoBuildRustCore Gradle task (see build.gradle.kts).
+/src/main/jniLibs/*/libtranslatecore.so
