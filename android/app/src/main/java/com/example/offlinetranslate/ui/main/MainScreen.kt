@@ -93,11 +93,13 @@ internal fun MainScreen(data: List<String>, modifier: Modifier = Modifier) {
 }
 
 private data class Utterance(
+  val id: Long,
   val transcript: String,
   val srcLang: String,
-  val translation: String,
   val tgtLang: String,
   val detected: String = "",
+  // null while the translation is still running (transcript shows immediately).
+  val translation: String? = null,
 )
 
 // FLORES code chosen by a cheap script heuristic (kana/kanji -> Japanese source).
@@ -133,6 +135,7 @@ private fun SessionPanel(modifier: Modifier = Modifier) {
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasPermission = it }
 
   val log = remember { mutableStateListOf<Utterance>() }
+  var nextId by remember { mutableStateOf(0L) }
   var status by remember { mutableStateOf("Ready. (record EN or JA — direction auto)") }
   var busy by remember { mutableStateOf(false) }
 
@@ -149,22 +152,31 @@ private fun SessionPanel(modifier: Modifier = Modifier) {
       status = "Recording 5s…"
       scope.launch {
         try {
-          val u = withContext(Dispatchers.IO) {
+          // Stage 1: record + transcribe.
+          val asr = withContext(Dispatchers.IO) {
             val pcm = recordPcm16(5000)
             status = "Transcribing…"
             Models.ensure(context, "asr") { status = it }
-            val asr = asrRecognize(asrDir.absolutePath, pcm, 16000)
-            val transcript = asr.text
-            // Prefer SenseVoice's detected language; fall back to the heuristic.
-            val src = floresFromAsrLang(asr.lang)
-              ?: if (isJapanese(transcript)) "jpn_Jpan" else "eng_Latn"
-            val tgt = if (src == "jpn_Jpan") "eng_Latn" else "jpn_Jpan"
-            status = "Translating $src → $tgt…"
-            Models.ensure(context, "nllb") { status = it }
-            val translation = translateText(nllbDir.absolutePath, transcript, src, tgt, ortDylib)
-            Utterance(transcript, src, translation, tgt, asr.lang)
+            asrRecognize(asrDir.absolutePath, pcm, 16000)
           }
-          log.add(0, u)
+          val transcript = asr.text
+          // Prefer SenseVoice's detected language; fall back to the heuristic.
+          val src = floresFromAsrLang(asr.lang)
+            ?: if (isJapanese(transcript)) "jpn_Jpan" else "eng_Latn"
+          val tgt = if (src == "jpn_Jpan") "eng_Latn" else "jpn_Jpan"
+
+          // Show the transcript right away (translation fills in below).
+          val id = nextId++
+          log.add(0, Utterance(id, transcript, src, tgt, asr.lang, translation = null))
+
+          // Stage 2: translate, then patch the same row by id.
+          status = "Translating $src → $tgt…"
+          val translation = withContext(Dispatchers.IO) {
+            Models.ensure(context, "nllb") { status = it }
+            translateText(nllbDir.absolutePath, transcript, src, tgt, ortDylib)
+          }
+          val idx = log.indexOfFirst { it.id == id }
+          if (idx >= 0) log[idx] = log[idx].copy(translation = translation)
           status = "Done. (${log.size} utterance${if (log.size == 1) "" else "s"})"
         } catch (e: Throwable) {
           status = "Error: ${e.message}"
@@ -188,7 +200,7 @@ private fun SessionPanel(modifier: Modifier = Modifier) {
         style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
       )
       Text(
-        "Translate  [${u.tgtLang}]: ${u.translation}",
+        "Translate  [${u.tgtLang}]: ${u.translation ?: "翻訳中…"}",
         style = androidx.compose.material3.MaterialTheme.typography.bodyLarge,
       )
       HorizontalDivider(Modifier.padding(top = 4.dp))
