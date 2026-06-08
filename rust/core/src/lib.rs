@@ -98,15 +98,18 @@ pub enum TtsError {
 }
 
 /// Loads the Kokoro TTS handle under `model_dir` into the resident engine
-/// without synthesizing, to warm it up. Idempotent per `model_dir`.
+/// without synthesizing, to warm it up. `lang` is the espeak-ng language code
+/// ("ja" for Japanese; empty keeps the en/zh lexicon path). Idempotent per
+/// `(model_dir, lang)`.
 #[uniffi::export]
-pub fn tts_load(model_dir: String) -> Result<(), TtsError> {
-    tts::load(&model_dir).map_err(TtsError::Failed)
+pub fn tts_load(model_dir: String, lang: String) -> Result<(), TtsError> {
+    tts::load(&model_dir, &lang).map_err(TtsError::Failed)
 }
 
 /// Synthesizes `text` with the Kokoro model under `model_dir`, writing a WAV to
 /// `out_wav`. `speed` is the Kokoro generation rate (playback speed is applied
-/// separately in the UI layer). Loads the model on first use, then reuses it.
+/// separately in the UI layer). `lang` selects espeak-ng phonemization ("ja" for
+/// Japanese; empty = en/zh lexicon path). Loads on first use, then reuses it.
 #[uniffi::export]
 pub fn tts_synthesize(
     model_dir: String,
@@ -114,9 +117,10 @@ pub fn tts_synthesize(
     sid: i32,
     speed: f32,
     out_wav: String,
+    lang: String,
 ) -> Result<TtsResult, TtsError> {
     let (sample_rate, num_samples) =
-        tts::synthesize(&model_dir, &text, sid, speed, &out_wav).map_err(TtsError::Failed)?;
+        tts::synthesize(&model_dir, &text, sid, speed, &out_wav, &lang).map_err(TtsError::Failed)?;
     Ok(TtsResult {
         sample_rate,
         num_samples,

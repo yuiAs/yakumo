@@ -5,8 +5,8 @@
 //! in a process-global keyed by `model_dir`; each call only generates audio.
 
 #[cfg(target_os = "android")]
-pub fn load(model_dir: &str) -> Result<(), String> {
-    imp::load(model_dir)
+pub fn load(model_dir: &str, lang: &str) -> Result<(), String> {
+    imp::load(model_dir, lang)
 }
 
 #[cfg(target_os = "android")]
@@ -16,12 +16,13 @@ pub fn synthesize(
     sid: i32,
     speed: f32,
     out_wav: &str,
+    lang: &str,
 ) -> Result<(i32, i32), String> {
-    imp::synthesize(model_dir, text, sid, speed, out_wav)
+    imp::synthesize(model_dir, text, sid, speed, out_wav, lang)
 }
 
 #[cfg(not(target_os = "android"))]
-pub fn load(_model_dir: &str) -> Result<(), String> {
+pub fn load(_model_dir: &str, _lang: &str) -> Result<(), String> {
     Err("TTS is only available on Android (native sherpa-onnx not linked on host)".to_owned())
 }
 
@@ -32,6 +33,7 @@ pub fn synthesize(
     _sid: i32,
     _speed: f32,
     _out_wav: &str,
+    _lang: &str,
 ) -> Result<(i32, i32), String> {
     Err("TTS is only available on Android (native sherpa-onnx not linked on host)".to_owned())
 }
@@ -181,6 +183,7 @@ mod imp {
     /// not auto-`Send`; access is serialized through `ENGINE`'s `Mutex`.
     struct TtsEngine {
         model_dir: String,
+        lang: String,
         tts: *const c_void,
     }
 
@@ -198,12 +201,21 @@ mod imp {
         ENGINE.get_or_init(|| Mutex::new(None))
     }
 
-    fn create_tts(model_dir: &str) -> Result<*const c_void, String> {
+    fn create_tts(model_dir: &str, lang: &str) -> Result<*const c_void, String> {
         let dir = Path::new(model_dir);
+
+        // Kokoro variants differ only in the model filename: v1.1-zh ships
+        // `model.int8.onnx`, v1.0-multilang ships `model.onnx`. Pick whichever
+        // is present so both layouts work.
+        let model_name = if dir.join("model.int8.onnx").is_file() {
+            "model.int8.onnx"
+        } else {
+            "model.onnx"
+        };
 
         // Preflight: confirm the native side can actually read the key files.
         // Distinguishes path/permission problems from model/config problems.
-        for name in ["model.int8.onnx", "voices.bin", "tokens.txt"] {
+        for name in [model_name, "voices.bin", "tokens.txt"] {
             let p = dir.join(name);
             match std::fs::File::open(&p) {
                 Ok(_) => {}
@@ -219,18 +231,30 @@ mod imp {
         };
 
         // Keep all CStrings alive until after CreateOfflineTts copies them internally.
-        let model = path("model.int8.onnx")?;
+        let model = path(model_name)?;
         let voices = path("voices.bin")?;
         let tokens = path("tokens.txt")?;
         let data_dir = path("espeak-ng-data")?;
-        let dict_dir = path("dict")?;
-        let lexicon = CString::new(format!(
-            "{},{}",
-            dir.join("lexicon-us-en.txt").to_string_lossy(),
-            dir.join("lexicon-zh.txt").to_string_lossy()
-        ))
-        .map_err(|e| e.to_string())?;
         let provider = CString::new("cpu").unwrap();
+
+        // Japanese must be phonemized via espeak-ng (kokoro.lang="ja"); the zh
+        // lexicon + jieba dict would otherwise read kanji as Mandarin. Other
+        // langs (empty = en/zh) keep the lexicon + dict and leave lang unset.
+        let is_ja = lang == "ja";
+        let lang_c = CString::new(lang).map_err(|e| e.to_string())?;
+        let dict_dir = if is_ja { None } else { Some(path("dict")?) };
+        let lexicon = if is_ja {
+            None
+        } else {
+            Some(
+                CString::new(format!(
+                    "{},{}",
+                    dir.join("lexicon-us-en.txt").to_string_lossy(),
+                    dir.join("lexicon-zh.txt").to_string_lossy()
+                ))
+                .map_err(|e| e.to_string())?,
+            )
+        };
 
         // Zero-init the whole config (null pointers / 0 floats) then fill Kokoro.
         let mut cfg: TtsConfig = unsafe { std::mem::zeroed() };
@@ -241,8 +265,15 @@ mod imp {
         cfg.model.kokoro.voices = voices.as_ptr();
         cfg.model.kokoro.tokens = tokens.as_ptr();
         cfg.model.kokoro.data_dir = data_dir.as_ptr();
-        cfg.model.kokoro.dict_dir = dict_dir.as_ptr();
-        cfg.model.kokoro.lexicon = lexicon.as_ptr();
+        if let Some(d) = &dict_dir {
+            cfg.model.kokoro.dict_dir = d.as_ptr();
+        }
+        if let Some(l) = &lexicon {
+            cfg.model.kokoro.lexicon = l.as_ptr();
+        }
+        if !lang.is_empty() {
+            cfg.model.kokoro.lang = lang_c.as_ptr();
+        }
         cfg.model.kokoro.length_scale = 1.0;
         cfg.max_num_sentences = 1;
 
@@ -256,21 +287,28 @@ mod imp {
     fn ensure_loaded<'a>(
         guard: &'a mut Option<TtsEngine>,
         model_dir: &str,
+        lang: &str,
     ) -> Result<&'a TtsEngine, String> {
-        let stale = guard.as_ref().map(|e| e.model_dir.as_str()) != Some(model_dir);
+        // Rebuild when the model dir OR lang changes: the espeak language is
+        // baked into the sherpa handle at creation time.
+        let stale = guard
+            .as_ref()
+            .map(|e| (e.model_dir.as_str(), e.lang.as_str()))
+            != Some((model_dir, lang));
         if stale {
-            let tts = create_tts(model_dir)?;
+            let tts = create_tts(model_dir, lang)?;
             *guard = Some(TtsEngine {
                 model_dir: model_dir.to_owned(),
+                lang: lang.to_owned(),
                 tts,
             });
         }
         Ok(guard.as_ref().expect("engine just loaded"))
     }
 
-    pub fn load(model_dir: &str) -> Result<(), String> {
+    pub fn load(model_dir: &str, lang: &str) -> Result<(), String> {
         let mut guard = engine_cell().lock().map_err(|e| e.to_string())?;
-        ensure_loaded(&mut guard, model_dir)?;
+        ensure_loaded(&mut guard, model_dir, lang)?;
         Ok(())
     }
 
@@ -280,12 +318,13 @@ mod imp {
         sid: i32,
         speed: f32,
         out_wav: &str,
+        lang: &str,
     ) -> Result<(i32, i32), String> {
         let text_c = CString::new(text).map_err(|e| e.to_string())?;
         let out_c = CString::new(out_wav).map_err(|e| e.to_string())?;
 
         let mut guard = engine_cell().lock().map_err(|e| e.to_string())?;
-        let tts = ensure_loaded(&mut guard, model_dir)?.tts;
+        let tts = ensure_loaded(&mut guard, model_dir, lang)?.tts;
 
         let audio = unsafe { SherpaOnnxOfflineTtsGenerate(tts, text_c.as_ptr(), sid, speed) };
         if audio.is_null() {

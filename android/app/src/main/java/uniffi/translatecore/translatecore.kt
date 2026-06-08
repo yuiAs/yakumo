@@ -762,9 +762,9 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_translatecore_fn_func_translate_text(`modelDir`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,`srcLang`: RustBuffer.ByValue,`tgtLang`: RustBuffer.ByValue,`ortDylib`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_translatecore_fn_func_tts_load(`modelDir`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_translatecore_fn_func_tts_load(`modelDir`: RustBuffer.ByValue,`lang`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_translatecore_fn_func_tts_synthesize(`modelDir`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,`sid`: Int,`speed`: Float,`outWav`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_translatecore_fn_func_tts_synthesize(`modelDir`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,`sid`: Int,`speed`: Float,`outWav`: RustBuffer.ByValue,`lang`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun ffi_translatecore_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -939,10 +939,10 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_translatecore_checksum_func_translate_text() != 13229.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_translatecore_checksum_func_tts_load() != 46181.toShort()) {
+    if (lib.uniffi_translatecore_checksum_func_tts_load() != 1404.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_translatecore_checksum_func_tts_synthesize() != 57710.toShort()) {
+    if (lib.uniffi_translatecore_checksum_func_tts_synthesize() != 6434.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1477,13 +1477,15 @@ public object FfiConverterTypeTtsError : FfiConverterRustBuffer<TtsException> {
 
         /**
          * Loads the Kokoro TTS handle under `model_dir` into the resident engine
-         * without synthesizing, to warm it up. Idempotent per `model_dir`.
+         * without synthesizing, to warm it up. `lang` is the espeak-ng language code
+         * ("ja" for Japanese; empty keeps the en/zh lexicon path). Idempotent per
+         * `(model_dir, lang)`.
          */
-    @Throws(TtsException::class) fun `ttsLoad`(`modelDir`: kotlin.String)
+    @Throws(TtsException::class) fun `ttsLoad`(`modelDir`: kotlin.String, `lang`: kotlin.String)
         = 
     uniffiRustCallWithError(TtsException) { _status ->
     UniffiLib.INSTANCE.uniffi_translatecore_fn_func_tts_load(
-        FfiConverterString.lower(`modelDir`),_status)
+        FfiConverterString.lower(`modelDir`),FfiConverterString.lower(`lang`),_status)
 }
     
     
@@ -1491,13 +1493,14 @@ public object FfiConverterTypeTtsError : FfiConverterRustBuffer<TtsException> {
         /**
          * Synthesizes `text` with the Kokoro model under `model_dir`, writing a WAV to
          * `out_wav`. `speed` is the Kokoro generation rate (playback speed is applied
-         * separately in the UI layer). Loads the model on first use, then reuses it.
+         * separately in the UI layer). `lang` selects espeak-ng phonemization ("ja" for
+         * Japanese; empty = en/zh lexicon path). Loads on first use, then reuses it.
          */
-    @Throws(TtsException::class) fun `ttsSynthesize`(`modelDir`: kotlin.String, `text`: kotlin.String, `sid`: kotlin.Int, `speed`: kotlin.Float, `outWav`: kotlin.String): TtsResult {
+    @Throws(TtsException::class) fun `ttsSynthesize`(`modelDir`: kotlin.String, `text`: kotlin.String, `sid`: kotlin.Int, `speed`: kotlin.Float, `outWav`: kotlin.String, `lang`: kotlin.String): TtsResult {
             return FfiConverterTypeTtsResult.lift(
     uniffiRustCallWithError(TtsException) { _status ->
     UniffiLib.INSTANCE.uniffi_translatecore_fn_func_tts_synthesize(
-        FfiConverterString.lower(`modelDir`),FfiConverterString.lower(`text`),FfiConverterInt.lower(`sid`),FfiConverterFloat.lower(`speed`),FfiConverterString.lower(`outWav`),_status)
+        FfiConverterString.lower(`modelDir`),FfiConverterString.lower(`text`),FfiConverterInt.lower(`sid`),FfiConverterFloat.lower(`speed`),FfiConverterString.lower(`outWav`),FfiConverterString.lower(`lang`),_status)
 }
     )
     }

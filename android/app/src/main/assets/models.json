@@ -10,15 +10,6 @@
       }
     },
     {
-      "id": "tts",
-      "dir": "kokoro-int8-multi-lang-v1_1",
-      "checkFile": "model.int8.onnx",
-      "archive": {
-        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_1.tar.bz2",
-        "format": "tar.bz2"
-      }
-    },
-    {
       "id": "nllb",
       "dir": "nllb",
       "checkFile": "decoder_model_merged_quantized.onnx",

@@ -5,7 +5,7 @@ import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
-import android.net.Uri
+import android.speech.tts.TextToSpeech
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
@@ -35,9 +35,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackParameters
-import androidx.media3.exoplayer.ExoPlayer
+import androidx.compose.runtime.DisposableEffect
 import androidx.navigation3.runtime.NavKey
 import com.example.offlinetranslate.data.DefaultDataRepository
 import com.example.offlinetranslate.data.Models
@@ -45,13 +43,11 @@ import com.example.offlinetranslate.theme.OfflineTranslateTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
+import java.util.Locale
 import uniffi.translatecore.asrLoad
 import uniffi.translatecore.asrRecognize
 import uniffi.translatecore.translateLoad
 import uniffi.translatecore.translateText
-import uniffi.translatecore.ttsLoad
-import uniffi.translatecore.ttsSynthesize
 
 @Composable
 fun MainScreen(
@@ -259,21 +255,32 @@ private fun TranslatePanel(modifier: Modifier = Modifier) {
 // Speeds applied at playback time (decoupled from synthesis), per the design.
 private val SPEEDS = listOf(1.0f, 1.5f, 2.0f, 2.5f)
 
+// TTS via the OS engine (Google Text-to-speech): handles Japanese kanji g2p
+// properly and runs offline once the voice data is installed. Replaces the
+// sherpa/Kokoro path, whose espeak-ng Japanese mangled kanji.
 @Composable
 private fun TtsPanel(modifier: Modifier = Modifier) {
   val context = LocalContext.current
-  val scope = rememberCoroutineScope()
-  val player = remember { ExoPlayer.Builder(context).build() }
 
-  val internalDir = remember { Models.dir(context, "tts") }
-  val outWav = remember { File(context.cacheDir, "tts.wav") }
-
-  var text by remember { mutableStateOf("Hello, this is Kokoro running fully offline on device.") }
+  var text by remember { mutableStateOf("こんにちは。これは端末上で動くオフライン翻訳のデモです。") }
   var speed by remember { mutableStateOf(1.0f) }
-  var status by remember { mutableStateOf("Ready.") }
-  var busy by remember { mutableStateOf(false) }
+  var status by remember { mutableStateOf("TTS: initializing…") }
 
-  Text("TTS (Kokoro) demo", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
+  // One engine per panel; the init callback fires on a binder thread, but
+  // Compose snapshot state is safe to write from any thread.
+  val engineRef = remember { mutableStateOf<TextToSpeech?>(null) }
+  DisposableEffect(Unit) {
+    val engine = TextToSpeech(context) { st ->
+      status = if (st == TextToSpeech.SUCCESS) "TTS: ready" else "TTS: init failed ($st)"
+    }
+    engineRef.value = engine
+    onDispose {
+      engine.stop()
+      engine.shutdown()
+    }
+  }
+
+  Text("TTS (Android OS / Google) demo", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
 
   OutlinedTextField(
     value = text,
@@ -284,43 +291,29 @@ private fun TtsPanel(modifier: Modifier = Modifier) {
 
   Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
     SPEEDS.forEach { s ->
-      FilterChip(
-        selected = speed == s,
-        onClick = {
-          speed = s
-          player.playbackParameters = PlaybackParameters(s)
-        },
-        label = { Text("${s}x") },
-      )
+      FilterChip(selected = speed == s, onClick = { speed = s }, label = { Text("${s}x") })
     }
   }
 
   Button(
-    enabled = !busy,
     onClick = {
-      busy = true
-      status = "Synthesizing…"
-      scope.launch {
-        try {
-          // Model load + synthesis are heavy: keep them off the main thread.
-          val result = withContext(Dispatchers.IO) {
-            Models.ensure(context, "tts") { status = it }
-            ttsSynthesize(internalDir.absolutePath, text, /* sid = */ 0, /* speed = */ 1.0f, outWav.absolutePath)
-          }
-          val seconds = result.numSamples.toFloat() / result.sampleRate
-          status = "OK: ${result.sampleRate} Hz, %.2fs audio · playing at ${speed}x".format(seconds)
-          player.setMediaItem(MediaItem.fromUri(Uri.fromFile(File(result.wavPath))))
-          player.playbackParameters = PlaybackParameters(speed)
-          player.prepare()
-          player.play()
-        } catch (e: Throwable) {
-          status = "Error: ${e.message}"
-        } finally {
-          busy = false
-        }
+      val engine = engineRef.value
+      if (engine == null) {
+        status = "TTS: not ready yet"
+        return@Button
       }
+      // Pick the locale from the text so Japanese isn't read with EN rules.
+      val locale = if (isJapanese(text)) Locale.JAPANESE else Locale.ENGLISH
+      val avail = engine.setLanguage(locale)
+      if (avail == TextToSpeech.LANG_MISSING_DATA || avail == TextToSpeech.LANG_NOT_SUPPORTED) {
+        status = "TTS: ${locale.language} voice unavailable — install it in system TTS settings"
+        return@Button
+      }
+      engine.setSpeechRate(speed)
+      engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "tts-demo")
+      status = "TTS: speaking (${locale.language}, ${speed}x)"
     },
-  ) { Text(if (busy) "Working…" else "Speak") }
+  ) { Text("Speak") }
 
   Text(status)
 }
@@ -455,8 +448,9 @@ private fun SetupPanel(modifier: Modifier = Modifier) {
   ) { Text(if (busy) "Downloading…" else "Download all models") }
   Text(status)
 
-  // Warm-up: load ASR / NLLB / TTS into resident engines up front so the first
-  // record/translate/speak doesn't pay the ~850 MB load cost inline.
+  // Warm-up: load ASR + NLLB into resident engines up front so the first
+  // record/translate doesn't pay the ~850 MB load cost inline. (TTS is the OS
+  // engine now — no model to preload.)
   Button(
     enabled = !busy,
     onClick = {
@@ -471,12 +465,9 @@ private fun SetupPanel(modifier: Modifier = Modifier) {
             engineStatus = "engines: loading nllb…"
             Models.ensure(context, "nllb") { engineStatus = it }
             translateLoad(Models.dir(context, "nllb").absolutePath, ortDylib)
-            engineStatus = "engines: loading tts…"
-            Models.ensure(context, "tts") { engineStatus = it }
-            ttsLoad(Models.dir(context, "tts").absolutePath)
           }
           enginesLoaded = true
-          engineStatus = "engines: loaded (asr, nllb, tts) — resident"
+          engineStatus = "engines: loaded (asr, nllb) — resident"
         } catch (e: Throwable) {
           engineStatus = "engines error: ${e.message}"
         } finally {
