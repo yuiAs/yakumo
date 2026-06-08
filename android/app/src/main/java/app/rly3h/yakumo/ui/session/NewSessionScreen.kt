@@ -14,9 +14,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -39,6 +39,7 @@ import app.rly3h.yakumo.data.SessionLog
 import app.rly3h.yakumo.data.SessionStore
 import app.rly3h.yakumo.data.Settings
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uniffi.translatecore.asrRecognize
@@ -54,7 +55,6 @@ private data class LiveTurn(
 )
 
 private const val ORT_DYLIB = "libonnxruntime.so"
-private const val RECORD_MS = 5000L
 
 @Composable
 fun NewSessionScreen(modifier: Modifier = Modifier) {
@@ -87,8 +87,10 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
 
   val turns = remember { mutableStateListOf<LiveTurn>() } // newest first
   var nextId by remember { mutableStateOf(0L) }
-  var status by remember { mutableStateOf("Tap record and speak (EN or JA).") }
-  var busy by remember { mutableStateOf(false) }
+  var status by remember { mutableStateOf("Tap Start and speak (EN or JA).") }
+  var recording by remember { mutableStateOf(false) }
+  // Read from the capture thread, so an AtomicBoolean rather than Compose state.
+  val running = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
 
   fun persist() {
     val done = turns.filter { it.translation != null }.reversed() // store oldest first
@@ -116,60 +118,88 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
     }
   }
 
-  fun record() {
+  // One captured segment -> transcript (shown immediately) -> translation
+  // (patched in) -> spoken. ASR/NLLB on IO; state writes on Main.
+  suspend fun processSegment(pcm: ByteArray) {
+    val asr = withContext(Dispatchers.IO) {
+      Models.ensure(context, "asr")
+      asrRecognize(asrDir.absolutePath, pcm, 16000)
+    }
+    val transcript = asr.text.trim()
+    if (transcript.isEmpty()) return // drop non-speech segments
+    val src = floresFromAsrLang(asr.lang)
+      ?: if (isJapanese(transcript)) "jpn_Jpan" else "eng_Latn"
+    val tgt = if (src == "jpn_Jpan") "eng_Latn" else "jpn_Jpan"
+
+    val id = withContext(Dispatchers.Main) {
+      val newId = nextId++
+      turns.add(0, LiveTurn(newId, transcript, src, tgt, asr.lang, translation = null))
+      newId
+    }
+    val translation = withContext(Dispatchers.IO) {
+      Models.ensure(context, "nllb")
+      translateText(nllbDir.absolutePath, transcript, src, tgt, ORT_DYLIB)
+    }
+    withContext(Dispatchers.Main) {
+      val idx = turns.indexOfFirst { it.id == id }
+      if (idx >= 0) turns[idx] = turns[idx].copy(translation = translation)
+      persist()
+    }
+    speak(translation, tgt)
+  }
+
+  fun start() {
     if (!hasPermission) {
       permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
       return
     }
-    busy = true
-    status = "Recording 5s…"
+    recording = true
+    running.set(true)
+    status = "Listening… speak, then tap Stop."
     scope.launch {
-      try {
-        val asr = withContext(Dispatchers.IO) {
-          val pcm = recordPcm16(RECORD_MS)
-          status = "Transcribing…"
-          Models.ensure(context, "asr") { status = it }
-          asrRecognize(asrDir.absolutePath, pcm, 16000)
+      // Capture and processing are decoupled by a channel: recording keeps
+      // running while each finished segment is transcribed/translated.
+      val channel = Channel<ByteArray>(Channel.UNLIMITED)
+      val capture = launch(Dispatchers.IO) {
+        try {
+          captureLoop(running) { seg -> channel.trySend(seg) }
+        } finally {
+          channel.close()
         }
-        val transcript = asr.text
-        val src = floresFromAsrLang(asr.lang)
-          ?: if (isJapanese(transcript)) "jpn_Jpan" else "eng_Latn"
-        val tgt = if (src == "jpn_Jpan") "eng_Latn" else "jpn_Jpan"
-
-        val id = nextId++
-        turns.add(0, LiveTurn(id, transcript, src, tgt, asr.lang, translation = null))
-
-        status = "Translating…"
-        val translation = withContext(Dispatchers.IO) {
-          Models.ensure(context, "nllb") { status = it }
-          translateText(nllbDir.absolutePath, transcript, src, tgt, ORT_DYLIB)
-        }
-        val idx = turns.indexOfFirst { it.id == id }
-        if (idx >= 0) turns[idx] = turns[idx].copy(translation = translation)
-        persist()
-        speak(translation, tgt)
-        status = "Done."
-      } catch (e: Throwable) {
-        status = "Error: ${e.message}"
-      } finally {
-        busy = false
       }
+      val consumer = launch(Dispatchers.IO) {
+        for (seg in channel) {
+          try {
+            processSegment(seg)
+          } catch (e: Throwable) {
+            withContext(Dispatchers.Main) { status = "Error: ${e.message}" }
+          }
+        }
+      }
+      capture.join()
+      consumer.join()
+      recording = false
+      status = "Stopped. (${turns.size} turn${if (turns.size == 1) "" else "s"})"
     }
+  }
+
+  fun stop() {
+    running.set(false)
+    status = "Finishing…"
   }
 
   Column(modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
     Button(
-      onClick = { record() },
-      enabled = !busy,
+      onClick = { if (recording) stop() else start() },
+      colors =
+        if (recording) {
+          ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+        } else {
+          ButtonDefaults.buttonColors()
+        },
       modifier = Modifier.fillMaxWidth(),
     ) {
-      if (busy) {
-        CircularProgressIndicator(
-          modifier = Modifier.padding(end = 8.dp),
-          strokeWidth = 2.dp,
-        )
-      }
-      Text(if (busy) "Working…" else "● Record & translate")
+      Text(if (recording) "■ Stop" else "● Start")
     }
 
     Row(

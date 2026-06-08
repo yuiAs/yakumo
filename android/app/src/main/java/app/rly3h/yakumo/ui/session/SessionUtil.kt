@@ -27,33 +27,101 @@ internal fun labelForFlores(code: String): String = when {
   else -> code
 }
 
-/** Records mono 16 kHz signed-16-bit PCM from the mic and returns it as bytes. */
-internal fun recordPcm16(durationMs: Long): ByteArray {
-  val sampleRate = 16000
+// --- Energy-VAD continuous capture ---
+// 16 kHz mono; 20 ms frames. Tuned for assist-style conversation: cut a segment
+// after a short pause so it can be translated while the user keeps talking.
+private const val SAMPLE_RATE = 16000
+private const val FRAME_SAMPLES = 320 // 20 ms
+private const val VAD_THRESH = 700.0 // int16 RMS; above = voiced
+private const val VAD_HANG_MS = 700 // trailing silence that ends a segment
+private const val VAD_MIN_MS = 300 // ignore blips shorter than this
+private const val VAD_MAX_MS = 12000 // force-cut very long utterances
+private const val PRE_FRAMES = 10 // ~200 ms pre-roll so onsets aren't clipped
+
+private fun ShortArray.rms(n: Int): Double {
+  var sum = 0.0
+  for (i in 0 until n) {
+    val v = this[i].toDouble()
+    sum += v * v
+  }
+  return kotlin.math.sqrt(sum / n)
+}
+
+private fun frameToLeBytes(frame: ShortArray, n: Int): ByteArray {
+  val b = ByteArray(n * 2)
+  for (i in 0 until n) {
+    val s = frame[i].toInt()
+    b[i * 2] = (s and 0xFF).toByte()
+    b[i * 2 + 1] = ((s shr 8) and 0xFF).toByte()
+  }
+  return b
+}
+
+/**
+ * Records continuously until `running` goes false, emitting one PCM16 segment
+ * per detected utterance (split on trailing silence). Blocking — run on IO.
+ */
+internal fun captureLoop(
+  running: java.util.concurrent.atomic.AtomicBoolean,
+  emit: (ByteArray) -> Unit,
+) {
   val minBuf = AudioRecord.getMinBufferSize(
-    sampleRate,
+    SAMPLE_RATE,
     AudioFormat.CHANNEL_IN_MONO,
     AudioFormat.ENCODING_PCM_16BIT,
   )
   val record = AudioRecord(
     MediaRecorder.AudioSource.VOICE_RECOGNITION,
-    sampleRate,
+    SAMPLE_RATE,
     AudioFormat.CHANNEL_IN_MONO,
     AudioFormat.ENCODING_PCM_16BIT,
-    maxOf(minBuf, sampleRate * 2),
+    maxOf(minBuf, SAMPLE_RATE * 2),
   )
-  val out = java.io.ByteArrayOutputStream()
-  val buf = ByteArray(4096)
+  val frame = ShortArray(FRAME_SAMPLES)
+  val seg = java.io.ByteArrayOutputStream()
+  val pre = ArrayDeque<ByteArray>()
+  var speaking = false
+  var voicedMs = 0
+  var silentMs = 0
+
+  fun cut() {
+    if (voicedMs >= VAD_MIN_MS) emit(seg.toByteArray())
+    seg.reset()
+    speaking = false
+    voicedMs = 0
+    silentMs = 0
+  }
+
   try {
     record.startRecording()
-    val end = System.currentTimeMillis() + durationMs
-    while (System.currentTimeMillis() < end) {
-      val n = record.read(buf, 0, buf.size)
-      if (n > 0) out.write(buf, 0, n)
+    while (running.get()) {
+      val n = record.read(frame, 0, frame.size)
+      if (n <= 0) continue
+      val bytes = frameToLeBytes(frame, n)
+      val frameMs = n * 1000 / SAMPLE_RATE
+      if (frame.rms(n) > VAD_THRESH) {
+        if (!speaking) {
+          speaking = true
+          voicedMs = 0
+          silentMs = 0
+          while (pre.isNotEmpty()) seg.write(pre.removeFirst())
+        }
+        seg.write(bytes)
+        voicedMs += frameMs
+        silentMs = 0
+      } else if (speaking) {
+        seg.write(bytes)
+        silentMs += frameMs
+        if (silentMs >= VAD_HANG_MS) cut()
+      } else {
+        pre.addLast(bytes)
+        if (pre.size > PRE_FRAMES) pre.removeFirst()
+      }
+      if (speaking && voicedMs + silentMs >= VAD_MAX_MS) cut()
     }
+    if (speaking) cut() // flush the final segment on stop
   } finally {
     record.stop()
     record.release()
   }
-  return out.toByteArray()
 }
