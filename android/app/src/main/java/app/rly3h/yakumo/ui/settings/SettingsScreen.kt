@@ -71,6 +71,8 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
   // an AtomicBoolean rather than Compose state.
   var downloading by remember { mutableStateOf(false) }
   var dlProgress by remember { mutableStateOf("") }
+  // null => indeterminate bar (size unknown / between files); else 0..1.
+  var dlFraction by remember { mutableStateOf<Float?>(null) }
   val cancelFlag = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
 
   var epRule1 by remember { mutableStateOf(settings.endpointRule1) }
@@ -121,13 +123,20 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         downloading = true
         cancelFlag.set(false)
         dlProgress = "Starting…"
+        dlFraction = null
         scope.launch {
           try {
             withContext(Dispatchers.IO) {
               // The experimental streaming model is large and opt-in; it has its
               // own button below rather than riding on "download all".
               for (id in ids.filter { it != "asr_stream" }) {
-                Models.ensure(context, id, onProgress = { dlProgress = it }, cancel = { cancelFlag.get() })
+                Models.ensure(
+                  context,
+                  id,
+                  onProgress = { dlProgress = it },
+                  onFraction = { dlFraction = it },
+                  cancel = { cancelFlag.get() },
+                )
               }
             }
             modelStatus = modelLine()
@@ -220,10 +229,17 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         downloading = true
         cancelFlag.set(false)
         dlProgress = "Starting…"
+        dlFraction = null
         scope.launch {
           try {
             withContext(Dispatchers.IO) {
-              Models.ensure(context, "asr_stream", onProgress = { dlProgress = it }, cancel = { cancelFlag.get() })
+              Models.ensure(
+                context,
+                "asr_stream",
+                onProgress = { dlProgress = it },
+                onFraction = { dlFraction = it },
+                cancel = { cancelFlag.get() },
+              )
             }
             modelStatus = modelLine()
           } catch (c: ModelCancelled) {
@@ -275,7 +291,12 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
       title = { Text("Downloading models") },
       text = {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-          LinearProgressIndicator(Modifier.fillMaxWidth())
+          val frac = dlFraction
+          if (frac == null) {
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+          } else {
+            LinearProgressIndicator(progress = { frac }, modifier = Modifier.fillMaxWidth())
+          }
           Text(dlProgress, style = MaterialTheme.typography.bodySmall)
         }
       },

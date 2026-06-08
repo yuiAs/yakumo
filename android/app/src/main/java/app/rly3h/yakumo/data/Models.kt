@@ -62,6 +62,9 @@ object Models {
     context: Context,
     id: String,
     onProgress: (String) -> Unit = {},
+    // Fraction in 0..1 for a determinate progress bar; null means "indeterminate"
+    // (size unknown — e.g. during bz2 extraction or when the server omits a length).
+    onFraction: (Float?) -> Unit = {},
     cancel: () -> Boolean = { false },
   ) {
     val s = spec(context, id)
@@ -78,8 +81,12 @@ object Models {
       val tmp = File(context.cacheDir, "$id-archive")
       val staging = File(context.filesDir, ".staging-$id")
       onProgress("$id: downloading…")
-      download(archive.url, tmp, cancel) { b -> onProgress("$id: ${b / 1_000_000} MB") }
+      download(archive.url, tmp, cancel) { written, total ->
+        onProgress("$id: ${written / 1_000_000} MB")
+        onFraction(if (total > 0) written.toFloat() / total else null)
+      }
       onProgress("$id: extracting…")
+      onFraction(null) // uncompressed size isn't known up front → indeterminate
       try {
         staging.deleteRecursively()
         staging.mkdirs()
@@ -103,14 +110,18 @@ object Models {
           continue
         }
         onProgress("$id: ${f.name}…")
-        download(f.url, File(dir, f.name), cancel) { b -> onProgress("$id: ${f.name} ${b / 1_000_000} MB") }
+        download(f.url, File(dir, f.name), cancel) { written, total ->
+          onProgress("$id: ${f.name} ${written / 1_000_000} MB")
+          onFraction(if (total > 0) written.toFloat() / total else null)
+        }
       }
     }
     onProgress("$id: done")
   }
 
   // Streaming download that manually follows redirects (HF/GitHub CDN hops).
-  private fun download(urlStr: String, dest: File, cancel: () -> Boolean, onProgress: (Long) -> Unit) {
+  // onProgress reports (bytesWritten, contentLength); contentLength is -1 when unknown.
+  private fun download(urlStr: String, dest: File, cancel: () -> Boolean, onProgress: (Long, Long) -> Unit) {
     var url = urlStr
     var hops = 0
     while (true) {
@@ -131,12 +142,13 @@ object Models {
         conn.disconnect()
         error("HTTP $code for $url")
       }
+      val contentLength = conn.contentLengthLong // -1 when the server omits it
       val part = File(dest.parentFile, dest.name + ".part")
       var cancelled = false
       conn.inputStream.use { input ->
         part.outputStream().use { out ->
           val buf = ByteArray(1 shl 16)
-          var total = 0L
+          var written = 0L
           while (true) {
             if (cancel()) {
               cancelled = true
@@ -145,8 +157,8 @@ object Models {
             val n = input.read(buf)
             if (n < 0) break
             out.write(buf, 0, n)
-            total += n
-            onProgress(total)
+            written += n
+            onProgress(written, contentLength)
           }
         }
       }
