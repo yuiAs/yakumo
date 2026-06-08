@@ -72,13 +72,27 @@ object Models {
     }
     val archive = s.archive
     if (archive != null) {
-      // tar.bz2 contains a top-level folder == s.dir, so extract into filesDir.
+      // tar.bz2 contains a top-level folder == s.dir. Extract into a staging dir
+      // first and only swap it into place once complete, so a cancelled/failed
+      // extraction never leaves a half-written model that looks "present".
       val tmp = File(context.cacheDir, "$id-archive")
+      val staging = File(context.filesDir, ".staging-$id")
       onProgress("$id: downloading…")
       download(archive.url, tmp, cancel) { b -> onProgress("$id: ${b / 1_000_000} MB") }
       onProgress("$id: extracting…")
-      extractTarBz2(tmp, context.filesDir, cancel) { b -> onProgress("$id: extracting… ${b / 1_000_000} MB") }
-      tmp.delete()
+      try {
+        staging.deleteRecursively()
+        staging.mkdirs()
+        extractTarBz2(tmp, staging, cancel) { b -> onProgress("$id: extracting… ${b / 1_000_000} MB") }
+        val extracted = File(staging, s.dir)
+        check(extracted.isDirectory) { "archive missing top-level dir ${s.dir}" }
+        val finalDir = File(context.filesDir, s.dir)
+        finalDir.deleteRecursively()
+        check(extracted.renameTo(finalDir)) { "failed to move ${s.dir} into place" }
+      } finally {
+        staging.deleteRecursively()
+        tmp.delete()
+      }
     } else {
       val dir = File(context.filesDir, s.dir).apply { mkdirs() }
       for (f in s.files) {
