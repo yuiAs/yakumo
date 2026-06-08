@@ -15,6 +15,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -34,6 +35,7 @@ import app.rly3h.yakumo.BuildConfig
 import app.rly3h.yakumo.data.ModelCancelled
 import app.rly3h.yakumo.data.Models
 import app.rly3h.yakumo.data.Settings
+import app.rly3h.yakumo.ui.session.VadBounds
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -68,6 +70,11 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
   var downloading by remember { mutableStateOf(false) }
   var dlProgress by remember { mutableStateOf("") }
   val cancelFlag = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+
+  var vadThresh by remember { mutableStateOf(settings.vadThreshold) }
+  var vadHang by remember { mutableStateOf(settings.vadHangMs.toFloat()) }
+  var vadMin by remember { mutableStateOf(settings.vadMinVoicedMs.toFloat()) }
+  var vadMax by remember { mutableStateOf(settings.vadMaxSegMs.toFloat()) }
 
   Column(
     modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -155,6 +162,34 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 
     HorizontalDivider()
 
+    SectionTitle("Voice detection")
+    Text(
+      "How speech is split into turns while recording. Applies to the next session.",
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.outline,
+    )
+    VadSlider("Silence to split a turn", vadHang, VadBounds.hangMs, { "${it.toInt()} ms" }, { vadHang = it }) {
+      settings.vadHangMs = vadHang.toInt()
+    }
+    VadSlider("Speech threshold (lower = more sensitive)", vadThresh, VadBounds.threshold, { it.toInt().toString() }, { vadThresh = it }) {
+      settings.vadThreshold = vadThresh
+    }
+    VadSlider("Min speech length", vadMin, VadBounds.minVoicedMs, { "${it.toInt()} ms" }, { vadMin = it }) {
+      settings.vadMinVoicedMs = vadMin.toInt()
+    }
+    VadSlider("Max segment length", vadMax, VadBounds.maxSegMs, { "${(it / 1000).toInt()} s" }, { vadMax = it }) {
+      settings.vadMaxSegMs = vadMax.toInt()
+    }
+    TextButton(onClick = {
+      settings.resetVad()
+      vadThresh = settings.vadThreshold
+      vadHang = settings.vadHangMs.toFloat()
+      vadMin = settings.vadMinVoicedMs.toFloat()
+      vadMax = settings.vadMaxSegMs.toFloat()
+    }) { Text("Reset to defaults") }
+
+    HorizontalDivider()
+
     SectionTitle("About")
     Text(
       "やくも v${BuildConfig.VERSION_NAME} (${BuildConfig.GIT_HASH})",
@@ -185,4 +220,24 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 @Composable
 private fun SectionTitle(text: String) {
   Text(text, style = MaterialTheme.typography.titleMedium)
+}
+
+// Label + current value + a bounded slider. `onChange` updates UI state live;
+// `onCommit` persists once the drag finishes (avoids writing on every tick).
+@Composable
+private fun VadSlider(
+  label: String,
+  value: Float,
+  range: ClosedFloatingPointRange<Float>,
+  format: (Float) -> String,
+  onChange: (Float) -> Unit,
+  onCommit: () -> Unit,
+) {
+  Column {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+      Text(label, style = MaterialTheme.typography.bodyMedium)
+      Text(format(value), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+    }
+    Slider(value = value, onValueChange = onChange, onValueChangeFinished = onCommit, valueRange = range)
+  }
 }

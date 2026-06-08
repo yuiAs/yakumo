@@ -32,11 +32,23 @@ internal fun labelForFlores(code: String): String = when {
 // after a short pause so it can be translated while the user keeps talking.
 private const val SAMPLE_RATE = 16000
 private const val FRAME_SAMPLES = 320 // 20 ms
-private const val VAD_THRESH = 600.0 // int16 RMS; above = voiced
-private const val VAD_HANG_MS = 1000 // trailing silence that ends a segment
-private const val VAD_MIN_MS = 250 // ignore blips shorter than this
-private const val VAD_MAX_MS = 15000 // force-cut very long utterances
 private const val PRE_FRAMES = 10 // ~200 ms pre-roll so onsets aren't clipped
+
+/** User-tunable VAD knobs (persisted in Settings). Defaults are the prior consts. */
+data class VadParams(
+  val thresholdRms: Double = 600.0, // int16 RMS; above = voiced
+  val hangMs: Int = 1000, // trailing silence that ends a segment
+  val minVoicedMs: Int = 250, // ignore blips shorter than this
+  val maxSegMs: Int = 15000, // force-cut very long utterances
+)
+
+// Sensible, processing-appropriate bounds for the Settings sliders.
+object VadBounds {
+  val threshold = 200f..2000f
+  val hangMs = 300f..2000f
+  val minVoicedMs = 100f..1000f
+  val maxSegMs = 5000f..30000f
+}
 
 private fun ShortArray.rms(n: Int): Double {
   var sum = 0.0
@@ -63,6 +75,7 @@ private fun frameToLeBytes(frame: ShortArray, n: Int): ByteArray {
  */
 internal fun captureLoop(
   running: java.util.concurrent.atomic.AtomicBoolean,
+  vad: VadParams,
   emit: (ByteArray) -> Unit,
 ) {
   val minBuf = AudioRecord.getMinBufferSize(
@@ -85,7 +98,7 @@ internal fun captureLoop(
   var silentMs = 0
 
   fun cut() {
-    if (voicedMs >= VAD_MIN_MS) emit(seg.toByteArray())
+    if (voicedMs >= vad.minVoicedMs) emit(seg.toByteArray())
     seg.reset()
     speaking = false
     voicedMs = 0
@@ -99,7 +112,7 @@ internal fun captureLoop(
       if (n <= 0) continue
       val bytes = frameToLeBytes(frame, n)
       val frameMs = n * 1000 / SAMPLE_RATE
-      if (frame.rms(n) > VAD_THRESH) {
+      if (frame.rms(n) > vad.thresholdRms) {
         if (!speaking) {
           speaking = true
           voicedMs = 0
@@ -112,12 +125,12 @@ internal fun captureLoop(
       } else if (speaking) {
         seg.write(bytes)
         silentMs += frameMs
-        if (silentMs >= VAD_HANG_MS) cut()
+        if (silentMs >= vad.hangMs) cut()
       } else {
         pre.addLast(bytes)
         if (pre.size > PRE_FRAMES) pre.removeFirst()
       }
-      if (speaking && voicedMs + silentMs >= VAD_MAX_MS) cut()
+      if (speaking && voicedMs + silentMs >= vad.maxSegMs) cut()
     }
     if (speaking) cut() // flush the final segment on stop
   } finally {

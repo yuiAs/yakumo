@@ -167,13 +167,14 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
     recording = true
     running.set(true)
     status = "Listening… speak, then tap Stop."
+    val vad = settings.vadParams() // latest knobs at the start of this session
     scope.launch {
       // Capture and processing are decoupled by a channel: recording keeps
       // running while each finished segment is transcribed/translated.
       val channel = Channel<ByteArray>(Channel.UNLIMITED)
       val capture = launch(Dispatchers.IO) {
         try {
-          captureLoop(running) { seg -> channel.trySend(seg) }
+          captureLoop(running, vad) { seg -> channel.trySend(seg) }
         } finally {
           channel.close()
         }
