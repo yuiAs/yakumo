@@ -653,6 +653,29 @@ internal open class UniffiForeignFutureStructVoid(
 internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
     fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructVoid.UniffiByValue,)
 }
+internal interface UniffiCallbackInterfaceTranslationSinkMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`text`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+@Structure.FieldOrder("onPartial", "uniffiFree")
+internal open class UniffiVTableCallbackInterfaceTranslationSink(
+    @JvmField internal var `onPartial`: UniffiCallbackInterfaceTranslationSinkMethod0? = null,
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+) : Structure() {
+    class UniffiByValue(
+        `onPartial`: UniffiCallbackInterfaceTranslationSinkMethod0? = null,
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    ): UniffiVTableCallbackInterfaceTranslationSink(`onPartial`,`uniffiFree`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceTranslationSink) {
+        `onPartial` = other.`onPartial`
+        `uniffiFree` = other.`uniffiFree`
+    }
+
+}
+
+
+
+
 
 
 
@@ -743,11 +766,14 @@ internal interface UniffiLib : Library {
             .also { lib: UniffiLib ->
                 uniffiCheckContractApiVersion(lib)
                 uniffiCheckApiChecksums(lib)
+                uniffiCallbackInterfaceTranslationSink.register(lib)
                 }
         }
         
     }
 
+    fun uniffi_translatecore_fn_init_callback_vtable_translationsink(`vtable`: UniffiVTableCallbackInterfaceTranslationSink,
+    ): Unit
     fun uniffi_translatecore_fn_func_asr_load(`modelDir`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_translatecore_fn_func_asr_recognize(`modelDir`: RustBuffer.ByValue,`pcm16le`: RustBuffer.ByValue,`sampleRate`: Int,uniffi_out_err: UniffiRustCallStatus, 
@@ -769,6 +795,8 @@ internal interface UniffiLib : Library {
     fun uniffi_translatecore_fn_func_translate_smoke(`ortDylib`: RustBuffer.ByValue,`modelPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_translatecore_fn_func_translate_text(`modelDir`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,`srcLang`: RustBuffer.ByValue,`tgtLang`: RustBuffer.ByValue,`ortDylib`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_translatecore_fn_func_translate_text_streaming(`modelDir`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,`srcLang`: RustBuffer.ByValue,`tgtLang`: RustBuffer.ByValue,`ortDylib`: RustBuffer.ByValue,`sink`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun ffi_translatecore_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -904,6 +932,10 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_translatecore_checksum_func_translate_text(
     ): Short
+    fun uniffi_translatecore_checksum_func_translate_text_streaming(
+    ): Short
+    fun uniffi_translatecore_checksum_method_translationsink_on_partial(
+    ): Short
     fun ffi_translatecore_uniffi_contract_version(
     ): Int
     
@@ -952,6 +984,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_translatecore_checksum_func_translate_text() != 13229.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_translatecore_checksum_func_translate_text_streaming() != 58540.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_translatecore_checksum_method_translationsink_on_partial() != 26439.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1336,6 +1374,94 @@ public object FfiConverterTypeTranslateError : FfiConverterRustBuffer<TranslateE
     }
 
 }
+
+
+
+
+
+/**
+ * Receives the partial translation as it is generated, one call per decoded
+ * token with the text decoded so far. Implemented on the foreign (Kotlin) side.
+ */
+public interface TranslationSink {
+    
+    fun `onPartial`(`text`: kotlin.String)
+    
+    companion object
+}
+
+// Magic number for the Rust proxy to call using the same mechanism as every other method,
+// to free the callback once it's dropped by Rust.
+internal const val IDX_CALLBACK_FREE = 0
+// Callback return codes
+internal const val UNIFFI_CALLBACK_SUCCESS = 0
+internal const val UNIFFI_CALLBACK_ERROR = 1
+internal const val UNIFFI_CALLBACK_UNEXPECTED_ERROR = 2
+
+/**
+ * @suppress
+ */
+public abstract class FfiConverterCallbackInterface<CallbackInterface: Any>: FfiConverter<CallbackInterface, Long> {
+    internal val handleMap = UniffiHandleMap<CallbackInterface>()
+
+    internal fun drop(handle: Long) {
+        handleMap.remove(handle)
+    }
+
+    override fun lift(value: Long): CallbackInterface {
+        return handleMap.get(value)
+    }
+
+    override fun read(buf: ByteBuffer) = lift(buf.getLong())
+
+    override fun lower(value: CallbackInterface) = handleMap.insert(value)
+
+    override fun allocationSize(value: CallbackInterface) = 8UL
+
+    override fun write(value: CallbackInterface, buf: ByteBuffer) {
+        buf.putLong(lower(value))
+    }
+}
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceTranslationSink {
+    internal object `onPartial`: UniffiCallbackInterfaceTranslationSinkMethod0 {
+        override fun callback(`uniffiHandle`: Long,`text`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeTranslationSink.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onPartial`(
+                    FfiConverterString.lift(`text`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeTranslationSink.handleMap.remove(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceTranslationSink.UniffiByValue(
+        `onPartial`,
+        uniffiFree,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_translatecore_fn_init_callback_vtable_translationsink(vtable)
+    }
+}
+
+/**
+ * The ffiConverter which transforms the Callbacks in to handles to pass to Rust.
+ *
+ * @suppress
+ */
+public object FfiConverterTypeTranslationSink: FfiConverterCallbackInterface<TranslationSink>()
         /**
          * Loads the SenseVoice recognizer under `model_dir` into the resident engine
          * without recognizing anything, to warm it up. Idempotent per `model_dir`.
@@ -1484,6 +1610,21 @@ public object FfiConverterTypeTranslateError : FfiConverterRustBuffer<TranslateE
     uniffiRustCallWithError(TranslateException) { _status ->
     UniffiLib.INSTANCE.uniffi_translatecore_fn_func_translate_text(
         FfiConverterString.lower(`modelDir`),FfiConverterString.lower(`text`),FfiConverterString.lower(`srcLang`),FfiConverterString.lower(`tgtLang`),FfiConverterString.lower(`ortDylib`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Streaming variant of [`translate_text`]: returns the final translation and, as
+         * it decodes, pushes each growing partial to `sink` so the UI can render the
+         * translation left-to-right. Callbacks arrive on the calling thread.
+         */
+    @Throws(TranslateException::class) fun `translateTextStreaming`(`modelDir`: kotlin.String, `text`: kotlin.String, `srcLang`: kotlin.String, `tgtLang`: kotlin.String, `ortDylib`: kotlin.String, `sink`: TranslationSink): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(TranslateException) { _status ->
+    UniffiLib.INSTANCE.uniffi_translatecore_fn_func_translate_text_streaming(
+        FfiConverterString.lower(`modelDir`),FfiConverterString.lower(`text`),FfiConverterString.lower(`srcLang`),FfiConverterString.lower(`tgtLang`),FfiConverterString.lower(`ortDylib`),FfiConverterTypeTranslationSink.lower(`sink`),_status)
 }
     )
     }

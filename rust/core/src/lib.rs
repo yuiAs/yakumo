@@ -43,6 +43,31 @@ pub fn translate_text(
         .map_err(TranslateError::Failed)
 }
 
+/// Receives the partial translation as it is generated, one call per decoded
+/// token with the text decoded so far. Implemented on the foreign (Kotlin) side.
+#[uniffi::export(callback_interface)]
+pub trait TranslationSink: Send {
+    fn on_partial(&self, text: String);
+}
+
+/// Streaming variant of [`translate_text`]: returns the final translation and, as
+/// it decodes, pushes each growing partial to `sink` so the UI can render the
+/// translation left-to-right. Callbacks arrive on the calling thread.
+#[uniffi::export]
+pub fn translate_text_streaming(
+    model_dir: String,
+    text: String,
+    src_lang: String,
+    tgt_lang: String,
+    ort_dylib: String,
+    sink: Box<dyn TranslationSink>,
+) -> Result<String, TranslateError> {
+    translate::translate_streaming(&model_dir, &text, &src_lang, &tgt_lang, &ort_dylib, |s| {
+        sink.on_partial(s.to_owned())
+    })
+    .map_err(TranslateError::Failed)
+}
+
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum AsrError {
     #[error("{0}")]

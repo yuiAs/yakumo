@@ -136,7 +136,16 @@ impl NllbEngine {
         })
     }
 
-    fn run(&mut self, text: &str, src_lang: &str, tgt_lang: &str) -> Result<String, String> {
+    /// Greedy decode. `on_partial` is called after each generated token with the
+    /// translation decoded so far, so the UI can stream it left-to-right; pass a
+    /// no-op closure for a one-shot translation.
+    fn run(
+        &mut self,
+        text: &str,
+        src_lang: &str,
+        tgt_lang: &str,
+        mut on_partial: impl FnMut(&str),
+    ) -> Result<String, String> {
         // Disjoint field borrows: `tok` reads tokenizer while encoder/decoder
         // are mutated; the borrow checker allows this within one method body.
         let tok = &self.tokenizer;
@@ -214,6 +223,11 @@ impl NllbEngine {
                 break;
             }
             gen.push(next_tok);
+            // Emit the translation decoded so far (one token longer each step).
+            let so_far: Vec<u32> = gen.iter().map(|&x| x as u32).collect();
+            if let Ok(s) = tok.decode(&so_far, true) {
+                on_partial(&s);
+            }
 
             let mut feeds: Vec<(Cow<str>, SessionInputValue)> = Vec::with_capacity(4 + 4 * n);
             feeds.push(("input_ids".into(), i64_tensor(vec![1, 1], vec![next_tok])?.into()));
@@ -305,10 +319,23 @@ pub fn translate(
     tgt_lang: &str,
     ort_dylib: &str,
 ) -> Result<String, String> {
+    translate_streaming(model_dir, text, src_lang, tgt_lang, ort_dylib, |_| {})
+}
+
+/// Like [`translate`], but reports the partial translation after every decoded
+/// token via `on_partial` (called on this thread while the engine lock is held).
+pub fn translate_streaming(
+    model_dir: &str,
+    text: &str,
+    src_lang: &str,
+    tgt_lang: &str,
+    ort_dylib: &str,
+    on_partial: impl FnMut(&str),
+) -> Result<String, String> {
     init_ort(ort_dylib);
     let mut guard = engine_cell().lock().map_err(|e| e.to_string())?;
     let engine = ensure_loaded(&mut guard, model_dir)?;
-    engine.run(text, src_lang, tgt_lang)
+    engine.run(text, src_lang, tgt_lang, on_partial)
 }
 
 /// Ensures the held engine matches `model_dir`, loading it on the first call or
