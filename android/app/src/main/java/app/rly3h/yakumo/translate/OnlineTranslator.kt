@@ -128,7 +128,13 @@ internal class OnlineTranslator(
   private fun listener(cb: TranslatorCallbacks) = object : WebSocketListener() {
     override fun onOpen(ws: WebSocket, response: Response) {
       val lang = floresToOpenAiLang(tgtFlores)
-      ws.send("""{"type":"session.update","session":{"audio":{"output":{"language":"$lang"}}}}""")
+      // Enabling input transcription is what makes the model emit source-language
+      // (input_transcript) deltas; without it only the translation comes back.
+      ws.send(
+        """{"type":"session.update","session":{"audio":{""" +
+          """"input":{"transcription":{"model":"$INPUT_TRANSCRIBE_MODEL"}},""" +
+          """"output":{"language":"$lang"}}}}""",
+      )
       cb.onStatus("Listening (online → ${labelOf(tgtFlores)})…")
       if (!opened.isCompleted) opened.complete(true)
     }
@@ -298,6 +304,7 @@ internal class OnlineTranslator(
   private fun nowMs(): Long = System.nanoTime() / 1_000_000
 
   private companion object {
+    const val INPUT_TRANSCRIBE_MODEL = "gpt-realtime-whisper"
     const val MAX_WS_QUEUE_BYTES = 256 * 1024L
     const val IDLE_POLL_MS = 300L
     const val IDLE_GAP_MS = 1200L
