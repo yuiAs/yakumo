@@ -67,6 +67,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Distinct applicationId so a debug build can sit alongside a
+            // release build on the same device (their signing keys differ, so
+            // they cannot overwrite each other under one id).
+            applicationIdSuffix = ".debug"
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
