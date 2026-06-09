@@ -22,6 +22,8 @@ jobs:
       # Actions are pinned to commit SHAs (supply-chain hardening); the trailing
       # comment records the human-readable tag each SHA was resolved from.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          lfs: true # gradle-wrapper.jar is stored via Git LFS (see .gitattributes)
 
       - name: Set up JDK
         uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
