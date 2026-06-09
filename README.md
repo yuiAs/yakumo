@@ -1,17 +1,19 @@
-# やくも (Yakumo) — Offline EN↔JA Voice Translator
+# やくも (Yakumo) — EN↔JA Voice Translator
 
-An on-device English↔Japanese voice translator for Android. Speech recognition,
-machine translation, and speech synthesis all run **fully offline** after a
-one-time model download. The inference core is written in Rust and exposed to a
-Jetpack Compose UI through UniFFI.
+An on-device English↔Japanese voice translator for Android. By default, speech
+recognition and machine translation run **fully offline** after a one-time model
+download, and speech is spoken back through the OS text-to-speech engine. An
+opt-in online mode can route a turn through OpenAI Realtime instead. The inference
+core is written in Rust and exposed to a Jetpack Compose UI through UniFFI.
 
 ## Features
 
-- Offline ASR → translation → (TTS) pipeline, no network at inference time
+- Offline ASR → translation → speech pipeline, no network at inference time
 - Automatic language detection (SenseVoice multilingual model)
 - VAD-based turn segmentation with tunable thresholds
 - Opt-in low-latency **streaming** English ASR (Nemotron)
-- Variable-rate playback for spoken translations
+- Spoken output via the OS TTS engine, with variable playback rate
+- Optional **online mode** (OpenAI Realtime speech-to-speech) — see below
 
 ## Building
 
@@ -65,17 +67,18 @@ pwsh rust/build-android.ps1
 ## Architecture at a glance
 
 ```
-Kotlin / Compose (app/)        UI, AudioRecord capture, model provisioning, settings
+Kotlin / Compose (app/)        UI, AudioRecord capture, OS TTS, model provisioning, settings
         │  UniFFI + JNA
         ▼
-Rust core (rust/core/)         pipeline orchestration, ASR/MT/TTS via FFI
+Rust core (rust/core/)         pipeline orchestration, ASR/MT via FFI
         │  C API / dlopen
         ▼
 Native libs (jniLibs/)         sherpa-onnx + onnxruntime, libtranslatecore.so
 ```
 
-- **Capture / playback** stay in Kotlin (`AudioRecord`); Rust handles pure
-  conversion and inference, which keeps it testable.
+- **Capture** stays in Kotlin (`AudioRecord`); **playback** uses the OS
+  `TextToSpeech` engine. Rust handles pure conversion and inference, which keeps
+  it testable.
 - **Translation** runs NLLB ONNX via the `ort` crate, which `dlopen`s the
   `libonnxruntime.so` already bundled with sherpa-onnx.
 
@@ -88,9 +91,24 @@ some OEMs).
 
 | ID | Model | Role | Source | Approx. size |
 |---|---|---|---|---|
+| `vad` | Silero VAD | Voice activity detection / turn segmentation | [k2-fsa releases](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) | ~2 MB |
 | `asr` | sherpa-onnx SenseVoice int8 (zh-en-ja-ko-yue) | ASR + language ID | [k2-fsa releases](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) | ~230 MB |
-| `nllb` | NLLB-200-distilled-600M (ONNX, quantized) | EN↔JA translation | [Xenova on HF](https://huggingface.co/Xenova/nllb-200-distilled-600M) | ~865 MB (encoder + decoder + tokenizer) |
+| `nllb` | NLLB-200-distilled-600M (ONNX, quantized, merged decoder) | Translation | [Xenova on HF](https://huggingface.co/Xenova/nllb-200-distilled-600M) | ~865 MB (encoder + decoder + tokenizer) |
 | `asr_stream` | sherpa-onnx Nemotron streaming EN 0.6B int8 | Experimental low-latency EN ASR | [k2-fsa releases](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) | ~464 MB |
+
+Spoken output uses the device's own OS TTS engine, so no synthesis model is
+downloaded here. NLLB is multilingual; the in-app language pair is EN↔JA, so only
+those directions are exercised.
+
+## Online mode (optional)
+
+Offline is the default and needs no account. If you want lower latency, Settings
+exposes an opt-in **Online (OpenAI)** mode: you supply your own OpenAI API key
+(encrypted on-device via `EncryptedSharedPreferences`), and a turn can be routed
+through **OpenAI Realtime** (`gpt-realtime-translate`) for streaming
+speech-to-speech. Audio is then sent to OpenAI and billed to your key. The toggle
+sits next to the mic, the offline pipeline stays the default, and **Test
+connection** in Settings mints an ephemeral token to confirm the key and network.
 
 ## License
 
