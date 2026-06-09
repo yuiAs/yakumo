@@ -372,12 +372,20 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     HorizontalDivider()
 
     SectionTitle("About")
-    Text(
-      "やくも v${BuildConfig.VERSION_NAME} (${BuildConfig.GIT_HASH})",
-      style = MaterialTheme.typography.bodySmall,
-    )
-    Text(remember { coreVersion() }, style = MaterialTheme.typography.bodySmall)
-    Text(remember { sherpaVersion() }, style = MaterialTheme.typography.bodySmall)
+    // Tight inner spacing keeps the version block together; the parent Column's
+    // 12.dp gap would otherwise scatter these one-line entries.
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+      Text(
+        remember {
+          "やくも v${BuildConfig.VERSION_NAME} (${BuildConfig.GIT_HASH}) / " +
+            "${coreVersion()} / ${sherpaVersion()}"
+        },
+        style = MaterialTheme.typography.bodySmall,
+      )
+      remember { Models.manifest(context).models }.forEach { m ->
+        Text("${m.id}: ${m.dir}", style = MaterialTheme.typography.bodySmall)
+      }
+    }
   }
 
   if (downloading) {
