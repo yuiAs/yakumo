@@ -19,8 +19,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -50,11 +48,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import uniffi.translatecore.TranslationSink
 import uniffi.translatecore.asrRecognize
 import uniffi.translatecore.asrStreamAccept
 import uniffi.translatecore.asrStreamLoad
 import uniffi.translatecore.asrStreamReset
-import uniffi.translatecore.translateText
+import uniffi.translatecore.translateTextStreaming
 
 private data class LiveTurn(
   val id: Long,
@@ -112,9 +111,10 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
   // Read from the capture thread, so an AtomicBoolean rather than Compose state.
   val running = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
 
-  // Keep the newest turn in view as it streams in.
-  LaunchedEffect(turns.size) {
-    if (turns.isNotEmpty()) listState.animateScrollToItem(turns.size - 1)
+  // Keep the newest content in view as turns (and the live partial) stream in.
+  LaunchedEffect(turns.size, partial) {
+    val last = turns.size - 1 + if (partial.isNotBlank()) 1 else 0
+    if (last >= 0) listState.animateScrollToItem(last)
   }
 
   fun persist() {
@@ -156,9 +156,17 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
       turns.add(LiveTurn(newId, transcript, src, tgt, lang, translation = null))
       newId
     }
+    // Patch the same row as NLLB decodes, so the translation streams in word by
+    // word. Compose snapshot state is safe to write from this background thread.
+    val sink = object : TranslationSink {
+      override fun onPartial(text: String) {
+        val idx = turns.indexOfFirst { it.id == id }
+        if (idx >= 0) turns[idx] = turns[idx].copy(translation = text)
+      }
+    }
     val translation = withContext(Dispatchers.IO) {
       Models.ensure(context, "nllb")
-      translateText(nllbDir.absolutePath, transcript, src, tgt, ORT_DYLIB)
+      translateTextStreaming(nllbDir.absolutePath, transcript, src, tgt, ORT_DYLIB, sink)
     }
     withContext(Dispatchers.Main) {
       val idx = turns.indexOfFirst { it.id == id }
@@ -311,9 +319,11 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
       onChange = { inputMode = it; settings.inputMode = it },
     )
 
-    // Conversation log: oldest at top, newest at the bottom (auto-scrolled).
+    // Conversation log: oldest at top, newest at the bottom (auto-scrolled). The
+    // live partial transcript rides along as a trailing entry so it never
+    // overlaps the controls below.
     Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-      if (turns.isEmpty()) {
+      if (turns.isEmpty() && partial.isBlank()) {
         Text(
           "Tap the mic and start speaking.",
           style = MaterialTheme.typography.bodyMedium,
@@ -326,6 +336,9 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
           verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
           items(turns, key = { it.id }) { t -> TurnCard(t.transcript, t.srcLang, t.tgtLang, t.translation) }
+          if (partial.isNotBlank()) {
+            item(key = "partial") { PartialTurn(partial) }
+          }
         }
       }
     }
@@ -336,13 +349,6 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      if (partial.isNotBlank()) {
-        Text(
-          partial,
-          style = MaterialTheme.typography.bodyLarge,
-          color = MaterialTheme.colorScheme.primary,
-        )
-      }
       Text(status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
       Surface(
         onClick = { if (recording) stop() else start() },
@@ -415,27 +421,39 @@ private fun InputModeChip(pair: LanguagePair, mode: InputMode, onChange: (InputM
   }
 }
 
+// A finished (or in-flight) turn. No card background — turns are separated by the
+// list spacing and the src→tgt header alone, per the flat look we want.
 @Composable
 internal fun TurnCard(transcript: String, srcLang: String, tgtLang: String, translation: String?) {
-  Card(
-    modifier = Modifier.fillMaxWidth(),
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+  Column(
+    Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+    verticalArrangement = Arrangement.spacedBy(4.dp),
   ) {
-    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-      Text(
-        "${labelForFlores(srcLang)} → ${labelForFlores(tgtLang)}",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.primary,
-      )
-      Text(
-        transcript,
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-      Text(
-        translation ?: "翻訳中…",
-        style = MaterialTheme.typography.titleMedium,
-      )
-    }
+    Text(
+      "${labelForFlores(srcLang)} → ${labelForFlores(tgtLang)}",
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.primary,
+    )
+    Text(
+      transcript,
+      style = MaterialTheme.typography.bodyMedium,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Text(
+      translation ?: "…", // language-neutral while the translation streams in
+      style = MaterialTheme.typography.titleMedium,
+    )
   }
+}
+
+// The streaming recognizer's live, not-yet-finalized transcript, shown at the
+// tail of the log in the accent color to set it apart from committed turns.
+@Composable
+private fun PartialTurn(text: String) {
+  Text(
+    text,
+    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+    style = MaterialTheme.typography.bodyLarge,
+    color = MaterialTheme.colorScheme.primary,
+  )
 }
