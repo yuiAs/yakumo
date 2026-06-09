@@ -42,39 +42,39 @@ class Settings(context: Context) {
   internal fun languagePair(): LanguagePair =
     LanguagePair(languageByFlores(langAFlores), languageByFlores(langBFlores))
 
-  // --- VAD knobs (defaults come from VadParams) ---
+  // --- Silero VAD knobs (defaults come from VadParams) ---
   private val def = VadParams()
 
   var vadThreshold: Float
-    get() = prefs.getFloat(KEY_VAD_THRESH, def.thresholdRms.toFloat())
+    get() = prefs.getFloat(KEY_VAD_THRESH, def.threshold)
     set(v) = prefs.edit().putFloat(KEY_VAD_THRESH, v).apply()
 
-  var vadHangMs: Int
-    get() = prefs.getInt(KEY_VAD_HANG, def.hangMs)
-    set(v) = prefs.edit().putInt(KEY_VAD_HANG, v).apply()
+  var vadMinSilenceMs: Int
+    get() = prefs.getInt(KEY_VAD_SILENCE, def.minSilenceMs)
+    set(v) = prefs.edit().putInt(KEY_VAD_SILENCE, v).apply()
 
-  var vadMinVoicedMs: Int
-    get() = prefs.getInt(KEY_VAD_MIN, def.minVoicedMs)
-    set(v) = prefs.edit().putInt(KEY_VAD_MIN, v).apply()
+  var vadMinSpeechMs: Int
+    get() = prefs.getInt(KEY_VAD_MIN_SPEECH, def.minSpeechMs)
+    set(v) = prefs.edit().putInt(KEY_VAD_MIN_SPEECH, v).apply()
 
-  var vadMaxSegMs: Int
-    get() = prefs.getInt(KEY_VAD_MAX, def.maxSegMs)
-    set(v) = prefs.edit().putInt(KEY_VAD_MAX, v).apply()
+  var vadMaxSpeechMs: Int
+    get() = prefs.getInt(KEY_VAD_MAX_SPEECH, def.maxSpeechMs)
+    set(v) = prefs.edit().putInt(KEY_VAD_MAX_SPEECH, v).apply()
 
   fun vadParams(): VadParams =
     VadParams(
-      thresholdRms = vadThreshold.toDouble(),
-      hangMs = vadHangMs,
-      minVoicedMs = vadMinVoicedMs,
-      maxSegMs = vadMaxSegMs,
+      threshold = vadThreshold,
+      minSilenceMs = vadMinSilenceMs,
+      minSpeechMs = vadMinSpeechMs,
+      maxSpeechMs = vadMaxSpeechMs,
     )
 
   /** Restores the VAD knobs to their defaults. */
   fun resetVad() {
-    vadThreshold = def.thresholdRms.toFloat()
-    vadHangMs = def.hangMs
-    vadMinVoicedMs = def.minVoicedMs
-    vadMaxSegMs = def.maxSegMs
+    vadThreshold = def.threshold
+    vadMinSilenceMs = def.minSilenceMs
+    vadMinSpeechMs = def.minSpeechMs
+    vadMaxSpeechMs = def.maxSpeechMs
   }
 
   // --- Streaming endpoint rules (defaults come from EndpointParams) ---
@@ -109,10 +109,11 @@ class Settings(context: Context) {
     const val KEY_LANG_A = "langAFlores"
     const val KEY_LANG_B = "langBFlores"
     const val KEY_INPUT_MODE = "inputMode"
-    const val KEY_VAD_THRESH = "vadThreshold"
-    const val KEY_VAD_HANG = "vadHangMs"
-    const val KEY_VAD_MIN = "vadMinVoicedMs"
-    const val KEY_VAD_MAX = "vadMaxSegMs"
+    // Silero-era keys (distinct from the old RMS knobs so stale values don't leak).
+    const val KEY_VAD_THRESH = "vadProbThreshold"
+    const val KEY_VAD_SILENCE = "vadMinSilenceMs"
+    const val KEY_VAD_MIN_SPEECH = "vadMinSpeechMs"
+    const val KEY_VAD_MAX_SPEECH = "vadMaxSpeechMs"
     const val KEY_EP_RULE1 = "endpointRule1"
     const val KEY_EP_RULE2 = "endpointRule2"
     const val KEY_EP_RULE3 = "endpointRule3"

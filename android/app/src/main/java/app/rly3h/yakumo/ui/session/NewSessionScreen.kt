@@ -54,6 +54,10 @@ import uniffi.translatecore.asrStreamAccept
 import uniffi.translatecore.asrStreamLoad
 import uniffi.translatecore.asrStreamReset
 import uniffi.translatecore.translateTextStreaming
+import uniffi.translatecore.vadAccept
+import uniffi.translatecore.vadFlush
+import uniffi.translatecore.vadLoad
+import uniffi.translatecore.vadReset
 
 private data class LiveTurn(
   val id: Long,
@@ -75,6 +79,7 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
   val asrDir = remember { Models.dir(context, "asr") }
   val streamDir = remember { Models.dir(context, "asr_stream") }
   val nllbDir = remember { Models.dir(context, "nllb") }
+  val vadDir = remember { Models.dir(context, "vad") }
   // Captured once: switching engines mid-session isn't supported.
   val streamingAsr = remember { settings.streamingAsr }
 
@@ -188,12 +193,30 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
   }
 
   // Capture and processing are decoupled by a channel so recording keeps running
-  // while each finished segment is transcribed/translated.
+  // while each finished segment is transcribed/translated. Raw ~100 ms chunks are
+  // fed to the resident Silero VAD, which emits a clean PCM segment per detected
+  // utterance; on stop we flush whatever was mid-sentence.
   suspend fun runSegmented() = kotlinx.coroutines.coroutineScope {
     val vad = settings.vadParams() // latest knobs at the start of this session
+    val vadPath = vadDir.absolutePath
+    withContext(Dispatchers.IO) {
+      Models.ensure(context, "vad")
+      vadLoad(vadPath, vad.threshold, vad.minSilenceMs / 1000f, vad.minSpeechMs / 1000f, vad.maxSpeechMs / 1000f)
+      vadReset(vadPath)
+    }
     val channel = Channel<ByteArray>(Channel.UNLIMITED)
     val capture = launch(Dispatchers.IO) {
-      try { captureLoop(running, vad) { seg -> channel.trySend(seg) } } finally { channel.close() }
+      try {
+        rawChunkCaptureLoop(running) { chunk ->
+          try {
+            for (seg in vadAccept(vadPath, chunk, 16000)) channel.trySend(seg)
+          } catch (_: Throwable) { /* drop a bad chunk; keep recording */ }
+        }
+      } finally {
+        // Emit any utterance still in progress when recording stopped.
+        runCatching { for (seg in vadFlush(vadPath)) channel.trySend(seg) }
+        channel.close()
+      }
     }
     val consumer = launch(Dispatchers.IO) {
       for (seg in channel) {
@@ -218,7 +241,7 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
     }
     val channel = Channel<ByteArray>(Channel.UNLIMITED)
     val capture = launch(Dispatchers.IO) {
-      try { streamingCaptureLoop(running) { channel.trySend(it) } } finally { channel.close() }
+      try { rawChunkCaptureLoop(running) { channel.trySend(it) } } finally { channel.close() }
     }
     val consumer = launch(Dispatchers.IO) {
       var current = ""

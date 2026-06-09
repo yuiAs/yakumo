@@ -76,27 +76,30 @@ internal fun localeFromFlores(code: String): Locale = languageByFlores(code).loc
 
 internal fun labelForFlores(code: String): String = languageByFlores(code).short
 
-// --- Energy-VAD continuous capture ---
-// 16 kHz mono; 20 ms frames. Tuned for assist-style conversation: cut a segment
-// after a short pause so it can be translated while the user keeps talking.
+// --- Continuous capture ---
+// 16 kHz mono. Both the segmented (Silero VAD) and streaming-ASR paths consume
+// fixed ~100 ms PCM16 chunks; segmentation happens downstream (Silero on the
+// Rust side, or sherpa's online endpointer), not in the capture loop.
 private const val SAMPLE_RATE = 16000
-private const val FRAME_SAMPLES = 320 // 20 ms
-private const val PRE_FRAMES = 10 // ~200 ms pre-roll so onsets aren't clipped
 
-/** User-tunable VAD knobs (persisted in Settings). Defaults are the prior consts. */
+/**
+ * User-tunable Silero VAD knobs (persisted in Settings). `threshold` is the
+ * speech-probability cutoff (0..1; lower = more sensitive); the durations are in
+ * milliseconds here for the sliders and converted to seconds at the FFI boundary.
+ */
 data class VadParams(
-  val thresholdRms: Double = 600.0, // int16 RMS; above = voiced
-  val hangMs: Int = 1000, // trailing silence that ends a segment
-  val minVoicedMs: Int = 500, // ignore blips shorter than this
-  val maxSegMs: Int = 8000, // force-cut very long utterances
+  val threshold: Float = 0.5f, // speech probability; above = voiced
+  val minSilenceMs: Int = 500, // trailing silence that ends a segment
+  val minSpeechMs: Int = 250, // ignore blips shorter than this
+  val maxSpeechMs: Int = 15000, // force-cut very long utterances
 )
 
 // Sensible, processing-appropriate bounds for the Settings sliders.
 object VadBounds {
-  val threshold = 200f..2000f
-  val hangMs = 300f..2000f
-  val minVoicedMs = 100f..1000f
-  val maxSegMs = 5000f..30000f
+  val threshold = 0.1f..0.9f
+  val minSilenceMs = 100f..1500f
+  val minSpeechMs = 50f..1000f
+  val maxSpeechMs = 5000f..30000f
 }
 
 /**
@@ -116,15 +119,6 @@ object EndpointBounds {
   val rule3 = 5.0f..30.0f
 }
 
-private fun ShortArray.rms(n: Int): Double {
-  var sum = 0.0
-  for (i in 0 until n) {
-    val v = this[i].toDouble()
-    sum += v * v
-  }
-  return kotlin.math.sqrt(sum / n)
-}
-
 private fun frameToLeBytes(frame: ShortArray, n: Int): ByteArray {
   val b = ByteArray(n * 2)
   for (i in 0 until n) {
@@ -135,84 +129,15 @@ private fun frameToLeBytes(frame: ShortArray, n: Int): ByteArray {
   return b
 }
 
-/**
- * Records continuously until `running` goes false, emitting one PCM16 segment
- * per detected utterance (split on trailing silence). Blocking — run on IO.
- */
-internal fun captureLoop(
-  running: java.util.concurrent.atomic.AtomicBoolean,
-  vad: VadParams,
-  emit: (ByteArray) -> Unit,
-) {
-  val minBuf = AudioRecord.getMinBufferSize(
-    SAMPLE_RATE,
-    AudioFormat.CHANNEL_IN_MONO,
-    AudioFormat.ENCODING_PCM_16BIT,
-  )
-  val record = AudioRecord(
-    MediaRecorder.AudioSource.VOICE_RECOGNITION,
-    SAMPLE_RATE,
-    AudioFormat.CHANNEL_IN_MONO,
-    AudioFormat.ENCODING_PCM_16BIT,
-    maxOf(minBuf, SAMPLE_RATE * 2),
-  )
-  val frame = ShortArray(FRAME_SAMPLES)
-  val seg = java.io.ByteArrayOutputStream()
-  val pre = ArrayDeque<ByteArray>()
-  var speaking = false
-  var voicedMs = 0
-  var silentMs = 0
-
-  fun cut() {
-    if (voicedMs >= vad.minVoicedMs) emit(seg.toByteArray())
-    seg.reset()
-    speaking = false
-    voicedMs = 0
-    silentMs = 0
-  }
-
-  try {
-    record.startRecording()
-    while (running.get()) {
-      val n = record.read(frame, 0, frame.size)
-      if (n <= 0) continue
-      val bytes = frameToLeBytes(frame, n)
-      val frameMs = n * 1000 / SAMPLE_RATE
-      if (frame.rms(n) > vad.thresholdRms) {
-        if (!speaking) {
-          speaking = true
-          voicedMs = 0
-          silentMs = 0
-          while (pre.isNotEmpty()) seg.write(pre.removeFirst())
-        }
-        seg.write(bytes)
-        voicedMs += frameMs
-        silentMs = 0
-      } else if (speaking) {
-        seg.write(bytes)
-        silentMs += frameMs
-        if (silentMs >= vad.hangMs) cut()
-      } else {
-        pre.addLast(bytes)
-        if (pre.size > PRE_FRAMES) pre.removeFirst()
-      }
-      if (speaking && voicedMs + silentMs >= vad.maxSegMs) cut()
-    }
-    if (speaking) cut() // flush the final segment on stop
-  } finally {
-    record.stop()
-    record.release()
-  }
-}
-
 private const val STREAM_CHUNK_SAMPLES = 1600 // 100 ms at 16 kHz
 
 /**
- * Continuous capture for the streaming recognizer: emits fixed ~100 ms PCM16
- * chunks until `running` goes false. No VAD here — the online recognizer does
- * its own endpoint detection on the decoded stream. Blocking — run on IO.
+ * Continuous capture emitting fixed ~100 ms PCM16 chunks until `running` goes
+ * false. Used by both the segmented path (chunks fed to Silero VAD, which emits
+ * speech segments) and the streaming recognizer (its own endpointer). Blocking —
+ * run on IO.
  */
-internal fun streamingCaptureLoop(
+internal fun rawChunkCaptureLoop(
   running: java.util.concurrent.atomic.AtomicBoolean,
   emit: (ByteArray) -> Unit,
 ) {

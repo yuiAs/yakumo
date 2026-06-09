@@ -80,9 +80,9 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
   var epRule3 by remember { mutableStateOf(settings.endpointRule3) }
 
   var vadThresh by remember { mutableStateOf(settings.vadThreshold) }
-  var vadHang by remember { mutableStateOf(settings.vadHangMs.toFloat()) }
-  var vadMin by remember { mutableStateOf(settings.vadMinVoicedMs.toFloat()) }
-  var vadMax by remember { mutableStateOf(settings.vadMaxSegMs.toFloat()) }
+  var vadSilence by remember { mutableStateOf(settings.vadMinSilenceMs.toFloat()) }
+  var vadMinSpeech by remember { mutableStateOf(settings.vadMinSpeechMs.toFloat()) }
+  var vadMaxSpeech by remember { mutableStateOf(settings.vadMaxSpeechMs.toFloat()) }
 
   Column(
     modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -181,28 +181,29 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 
     SectionTitle("Voice detection")
     Text(
-      "How speech is split into turns while recording. Applies to the next session.",
+      "Silero VAD splits speech into turns while recording. Robust to background " +
+        "noise. Applies to the next session; changing these reloads the detector.",
       style = MaterialTheme.typography.bodySmall,
       color = MaterialTheme.colorScheme.outline,
     )
-    VadSlider("Silence to split a turn", vadHang, VadBounds.hangMs, { "${it.toInt()} ms" }, { vadHang = it }) {
-      settings.vadHangMs = vadHang.toInt()
+    VadSlider("Silence to split a turn", vadSilence, VadBounds.minSilenceMs, { "${it.toInt()} ms" }, { vadSilence = it }) {
+      settings.vadMinSilenceMs = vadSilence.toInt()
     }
-    VadSlider("Speech threshold (lower = more sensitive)", vadThresh, VadBounds.threshold, { it.toInt().toString() }, { vadThresh = it }) {
+    VadSlider("Speech sensitivity (lower = more sensitive)", vadThresh, VadBounds.threshold, { "%.2f".format(it) }, { vadThresh = it }) {
       settings.vadThreshold = vadThresh
     }
-    VadSlider("Min speech length", vadMin, VadBounds.minVoicedMs, { "${it.toInt()} ms" }, { vadMin = it }) {
-      settings.vadMinVoicedMs = vadMin.toInt()
+    VadSlider("Min speech length", vadMinSpeech, VadBounds.minSpeechMs, { "${it.toInt()} ms" }, { vadMinSpeech = it }) {
+      settings.vadMinSpeechMs = vadMinSpeech.toInt()
     }
-    VadSlider("Max segment length", vadMax, VadBounds.maxSegMs, { "${(it / 1000).toInt()} s" }, { vadMax = it }) {
-      settings.vadMaxSegMs = vadMax.toInt()
+    VadSlider("Max segment length", vadMaxSpeech, VadBounds.maxSpeechMs, { "${(it / 1000).toInt()} s" }, { vadMaxSpeech = it }) {
+      settings.vadMaxSpeechMs = vadMaxSpeech.toInt()
     }
     TextButton(onClick = {
       settings.resetVad()
       vadThresh = settings.vadThreshold
-      vadHang = settings.vadHangMs.toFloat()
-      vadMin = settings.vadMinVoicedMs.toFloat()
-      vadMax = settings.vadMaxSegMs.toFloat()
+      vadSilence = settings.vadMinSilenceMs.toFloat()
+      vadMinSpeech = settings.vadMinSpeechMs.toFloat()
+      vadMaxSpeech = settings.vadMaxSpeechMs.toFloat()
     }) { Text("Reset to defaults") }
 
     HorizontalDivider()
