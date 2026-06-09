@@ -2,6 +2,7 @@ import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Properties
 
 buildscript {
   repositories { mavenCentral() }
@@ -29,6 +30,17 @@ fun gitHash(): String =
     "unknown"
   }
 
+// Release signing credentials, read from keystore.properties (local builds,
+// gitignored) or environment variables (CI). When none are present the release
+// build is left unsigned, so debug builds and secret-less CI runs still succeed.
+val keystoreProps = Properties().apply {
+  val f = rootProject.file("keystore.properties")
+  if (f.exists()) f.inputStream().use { load(it) }
+}
+fun signingValue(propKey: String, envKey: String): String? =
+  (keystoreProps.getProperty(propKey) ?: System.getenv(envKey))?.takeIf { it.isNotBlank() }
+val releaseStorePath = signingValue("storeFile", "YAKUMO_KEYSTORE_FILE")
+
 android {
     namespace = "app.rly3h.yakumo"
     compileSdk = 36
@@ -41,10 +53,24 @@ android {
         buildConfigField("String", "GIT_HASH", "\"${gitHash()}\"")
     }
 
+    signingConfigs {
+        // Only declared when credentials are available; otherwise the release
+        // build falls through to unsigned rather than failing configuration.
+        if (releaseStorePath != null) {
+            create("release") {
+                storeFile = rootProject.file(releaseStorePath)
+                storePassword = signingValue("storePassword", "YAKUMO_KEYSTORE_PASSWORD")
+                keyAlias = signingValue("keyAlias", "YAKUMO_KEY_ALIAS")
+                keyPassword = signingValue("keyPassword", "YAKUMO_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.findByName("release")
         }
     }
     compileOptions {
