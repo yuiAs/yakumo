@@ -756,6 +756,14 @@ internal open class UniffiVTableCallbackInterfaceTranslationSink(
 
 
 
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -798,6 +806,14 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_translatecore_fn_func_translate_text_streaming(`modelDir`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,`srcLang`: RustBuffer.ByValue,`tgtLang`: RustBuffer.ByValue,`ortDylib`: RustBuffer.ByValue,`sink`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_translatecore_fn_func_vad_accept(`modelDir`: RustBuffer.ByValue,`pcm16le`: RustBuffer.ByValue,`sampleRate`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_translatecore_fn_func_vad_flush(`modelDir`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_translatecore_fn_func_vad_load(`modelDir`: RustBuffer.ByValue,`threshold`: Float,`minSilenceS`: Float,`minSpeechS`: Float,`maxSpeechS`: Float,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_translatecore_fn_func_vad_reset(`modelDir`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun ffi_translatecore_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun ffi_translatecore_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -934,6 +950,14 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_translatecore_checksum_func_translate_text_streaming(
     ): Short
+    fun uniffi_translatecore_checksum_func_vad_accept(
+    ): Short
+    fun uniffi_translatecore_checksum_func_vad_flush(
+    ): Short
+    fun uniffi_translatecore_checksum_func_vad_load(
+    ): Short
+    fun uniffi_translatecore_checksum_func_vad_reset(
+    ): Short
     fun uniffi_translatecore_checksum_method_translationsink_on_partial(
     ): Short
     fun ffi_translatecore_uniffi_contract_version(
@@ -987,6 +1011,18 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_translatecore_checksum_func_translate_text_streaming() != 58540.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_translatecore_checksum_func_vad_accept() != 24542.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_translatecore_checksum_func_vad_flush() != 41462.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_translatecore_checksum_func_vad_load() != 21575.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_translatecore_checksum_func_vad_reset() != 21433.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_translatecore_checksum_method_translationsink_on_partial() != 26439.toShort()) {
@@ -1379,6 +1415,65 @@ public object FfiConverterTypeTranslateError : FfiConverterRustBuffer<TranslateE
 
 
 
+sealed class VadException: kotlin.Exception() {
+    
+    class Failed(
+        
+        val v1: kotlin.String
+        ) : VadException() {
+        override val message
+            get() = "v1=${ v1 }"
+    }
+    
+
+    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<VadException> {
+        override fun lift(error_buf: RustBuffer.ByValue): VadException = FfiConverterTypeVadError.lift(error_buf)
+    }
+
+    
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeVadError : FfiConverterRustBuffer<VadException> {
+    override fun read(buf: ByteBuffer): VadException {
+        
+
+        return when(buf.getInt()) {
+            1 -> VadException.Failed(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: VadException): ULong {
+        return when(value) {
+            is VadException.Failed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.v1)
+            )
+        }
+    }
+
+    override fun write(value: VadException, buf: ByteBuffer) {
+        when(value) {
+            is VadException.Failed -> {
+                buf.putInt(1)
+                FfiConverterString.write(value.v1, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+
+}
+
+
+
+
+
 /**
  * Receives the partial translation as it is generated, one call per decoded
  * token with the text decoded so far. Implemented on the foreign (Kotlin) side.
@@ -1462,6 +1557,34 @@ internal object uniffiCallbackInterfaceTranslationSink {
  * @suppress
  */
 public object FfiConverterTypeTranslationSink: FfiConverterCallbackInterface<TranslationSink>()
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceByteArray: FfiConverterRustBuffer<List<kotlin.ByteArray>> {
+    override fun read(buf: ByteBuffer): List<kotlin.ByteArray> {
+        val len = buf.getInt()
+        return List<kotlin.ByteArray>(len) {
+            FfiConverterByteArray.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.ByteArray>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterByteArray.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.ByteArray>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterByteArray.write(it, buf)
+        }
+    }
+}
         /**
          * Loads the SenseVoice recognizer under `model_dir` into the resident engine
          * without recognizing anything, to warm it up. Idempotent per `model_dir`.
@@ -1628,6 +1751,62 @@ public object FfiConverterTypeTranslationSink: FfiConverterCallbackInterface<Tra
 }
     )
     }
+    
+
+        /**
+         * Feeds one chunk of 16 kHz mono PCM16 LE into the resident detector and returns
+         * the speech segments that finished on this chunk (each as PCM16 LE, ready for
+         * `asr_recognize`). Usually empty until a pause ends an utterance.
+         */
+    @Throws(VadException::class) fun `vadAccept`(`modelDir`: kotlin.String, `pcm16le`: kotlin.ByteArray, `sampleRate`: kotlin.Int): List<kotlin.ByteArray> {
+            return FfiConverterSequenceByteArray.lift(
+    uniffiRustCallWithError(VadException) { _status ->
+    UniffiLib.INSTANCE.uniffi_translatecore_fn_func_vad_accept(
+        FfiConverterString.lower(`modelDir`),FfiConverterByteArray.lower(`pcm16le`),FfiConverterInt.lower(`sampleRate`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Forces the in-progress utterance to be emitted (e.g. when recording stops
+         * mid-sentence). Returns the flushed segment(s) as PCM16 LE.
+         */
+    @Throws(VadException::class) fun `vadFlush`(`modelDir`: kotlin.String): List<kotlin.ByteArray> {
+            return FfiConverterSequenceByteArray.lift(
+    uniffiRustCallWithError(VadException) { _status ->
+    UniffiLib.INSTANCE.uniffi_translatecore_fn_func_vad_flush(
+        FfiConverterString.lower(`modelDir`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Loads/configures the Silero VAD under `model_dir`. The tuning params (speech
+         * probability `threshold`, and minimum silence / minimum speech / maximum speech
+         * durations in seconds) are baked in at creation, so changing them recreates the
+         * detector. Idempotent for equal arguments.
+         */
+    @Throws(VadException::class) fun `vadLoad`(`modelDir`: kotlin.String, `threshold`: kotlin.Float, `minSilenceS`: kotlin.Float, `minSpeechS`: kotlin.Float, `maxSpeechS`: kotlin.Float)
+        = 
+    uniffiRustCallWithError(VadException) { _status ->
+    UniffiLib.INSTANCE.uniffi_translatecore_fn_func_vad_load(
+        FfiConverterString.lower(`modelDir`),FfiConverterFloat.lower(`threshold`),FfiConverterFloat.lower(`minSilenceS`),FfiConverterFloat.lower(`minSpeechS`),FfiConverterFloat.lower(`maxSpeechS`),_status)
+}
+    
+    
+
+        /**
+         * Discards any buffered audio / in-progress utterance in the resident detector.
+         */
+    @Throws(VadException::class) fun `vadReset`(`modelDir`: kotlin.String)
+        = 
+    uniffiRustCallWithError(VadException) { _status ->
+    UniffiLib.INSTANCE.uniffi_translatecore_fn_func_vad_reset(
+        FfiConverterString.lower(`modelDir`),_status)
+}
+    
     
 
 

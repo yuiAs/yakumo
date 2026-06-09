@@ -7,6 +7,7 @@ uniffi::setup_scaffolding!();
 
 mod asr;
 mod translate;
+mod vad;
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum TranslateError {
@@ -153,6 +154,70 @@ pub fn asr_stream_accept(
 #[uniffi::export]
 pub fn asr_stream_reset(model_dir: String) -> Result<(), AsrError> {
     asr::stream_reset(&model_dir).map_err(AsrError::Failed)
+}
+
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+pub enum VadError {
+    #[error("{0}")]
+    Failed(String),
+}
+
+/// Packs mono f32 samples back into 16 kHz PCM16 little-endian bytes, the format
+/// the SenseVoice recognizer consumes — so a VAD segment flows straight in.
+fn samples_to_pcm16le(samples: Vec<f32>) -> Vec<u8> {
+    let mut out = Vec::with_capacity(samples.len() * 2);
+    for s in samples {
+        let v = (s * 32768.0).clamp(-32768.0, 32767.0) as i16;
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out
+}
+
+/// Loads/configures the Silero VAD under `model_dir`. The tuning params (speech
+/// probability `threshold`, and minimum silence / minimum speech / maximum speech
+/// durations in seconds) are baked in at creation, so changing them recreates the
+/// detector. Idempotent for equal arguments.
+#[uniffi::export]
+pub fn vad_load(
+    model_dir: String,
+    threshold: f32,
+    min_silence_s: f32,
+    min_speech_s: f32,
+    max_speech_s: f32,
+) -> Result<(), VadError> {
+    vad::load(&model_dir, threshold, min_silence_s, min_speech_s, max_speech_s)
+        .map_err(VadError::Failed)
+}
+
+/// Feeds one chunk of 16 kHz mono PCM16 LE into the resident detector and returns
+/// the speech segments that finished on this chunk (each as PCM16 LE, ready for
+/// `asr_recognize`). Usually empty until a pause ends an utterance.
+#[uniffi::export]
+pub fn vad_accept(
+    model_dir: String,
+    pcm16le: Vec<u8>,
+    sample_rate: i32,
+) -> Result<Vec<Vec<u8>>, VadError> {
+    let samples: Vec<f32> = pcm16le
+        .chunks_exact(2)
+        .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
+        .collect();
+    let segs = vad::accept(&model_dir, &samples, sample_rate).map_err(VadError::Failed)?;
+    Ok(segs.into_iter().map(samples_to_pcm16le).collect())
+}
+
+/// Forces the in-progress utterance to be emitted (e.g. when recording stops
+/// mid-sentence). Returns the flushed segment(s) as PCM16 LE.
+#[uniffi::export]
+pub fn vad_flush(model_dir: String) -> Result<Vec<Vec<u8>>, VadError> {
+    let segs = vad::flush(&model_dir).map_err(VadError::Failed)?;
+    Ok(segs.into_iter().map(samples_to_pcm16le).collect())
+}
+
+/// Discards any buffered audio / in-progress utterance in the resident detector.
+#[uniffi::export]
+pub fn vad_reset(model_dir: String) -> Result<(), VadError> {
+    vad::reset(&model_dir).map_err(VadError::Failed)
 }
 
 /// Version banner for the native core. Used by the PoC to confirm the app is

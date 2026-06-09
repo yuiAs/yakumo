@@ -1,6 +1,14 @@
 {
   "models": [
     {
+      "id": "vad",
+      "dir": "silero-vad",
+      "checkFile": "silero_vad.onnx",
+      "files": [
+        { "name": "silero_vad.onnx", "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx" }
+      ]
+    },
+    {
       "id": "asr",
       "dir": "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17",
       "checkFile": "model.int8.onnx",
