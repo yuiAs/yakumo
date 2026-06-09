@@ -9,11 +9,11 @@ import android.net.NetworkCapabilities
 import android.speech.tts.TextToSpeech
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -22,10 +22,15 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilledTonalIconToggleButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -42,8 +47,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import app.rly3h.yakumo.R
 import app.rly3h.yakumo.data.LoggedUtterance
 import app.rly3h.yakumo.data.Models
 import app.rly3h.yakumo.data.SessionLog
@@ -88,9 +95,11 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
   var recording by remember { mutableStateOf(false) }
   var autoSpeak by remember { mutableStateOf(settings.autoSpeak) }
   var online by remember { mutableStateOf(settings.onlineEnabled) }
-  // Conversation language pair + input-direction override (persisted).
-  var pair by remember { mutableStateOf(settings.languagePair()) }
-  var inputMode by remember { mutableStateOf(settings.inputMode) }
+  // The user's own language is fixed (changed in Settings); the partner's language
+  // is chosen here, null meaning auto-detect. They collapse to the translator's
+  // LanguagePair at Start (see Conversation.toPair).
+  val mine = remember { settings.conversation().mine }
+  var partner by remember { mutableStateOf(settings.conversation().partner) }
   val listState = rememberLazyListState()
 
   val networkUp by rememberNetworkAvailable()
@@ -176,9 +185,12 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
       status = "Streaming model missing — download it in Settings → Experimental."
       return
     }
+    // Direction is always auto-detected per utterance; the partner choice only
+    // resolves which language sits opposite the user.
+    val pair = Conversation(mine, partner).toPair()
     val translator: SpeechTranslator =
-      if (useOnline) OnlineTranslator(context, settings, pair, inputMode)
-      else OfflineTranslator(context, settings, pair, inputMode, streamingAsr)
+      if (useOnline) OnlineTranslator(context, settings, pair, InputMode.AUTO)
+      else OfflineTranslator(context, settings, pair, InputMode.AUTO, streamingAsr)
     translatorRef.value = translator
     recording = true
     status = when {
@@ -195,56 +207,47 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
   }
 
   Column(modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    // Google-Translate-style pair bar + per-utterance input override.
+    // Top bar: the partner-language control (the only language you pick here) on
+    // the left; engine + speak toggles on the right. Your own language is fixed in
+    // Settings and shown only as a quiet caption below.
     Row(
       Modifier.fillMaxWidth().padding(top = 8.dp),
       horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      LanguageBar(
-        pair = pair,
-        onPick = { isA, opt ->
-          val next = if (isA) pair.copy(a = opt) else pair.copy(b = opt)
-          // Picking the same language on both sides is meaningless; swap instead.
-          pair = if (next.a == next.b) LanguagePair(pair.b, pair.a) else next
-          settings.langAFlores = pair.a.flores
-          settings.langBFlores = pair.b.flores
-        },
-        onSwap = {
-          pair = LanguagePair(pair.b, pair.a)
-          settings.langAFlores = pair.a.flores
-          settings.langBFlores = pair.b.flores
-          // Forced direction follows the side it was pinned to.
-          inputMode = when (inputMode) {
-            InputMode.FORCE_A -> InputMode.FORCE_B
-            InputMode.FORCE_B -> InputMode.FORCE_A
-            InputMode.AUTO -> InputMode.AUTO
-          }
-          settings.inputMode = inputMode
+      PartnerPicker(
+        mine = mine,
+        partner = partner,
+        enabled = !recording,
+        onChange = {
+          partner = it
+          settings.partnerFlores = it?.flores
         },
       )
-      Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-        // Online/Offline engine toggle. Enabled only with a key + network, and
-        // never mid-session (the engine is captured at Start).
-        FilterChip(
-          selected = online,
-          enabled = canGoOnline && !recording,
-          onClick = {
-            online = !online
-            settings.onlineEnabled = online
-          },
-          label = { Text(if (online) "☁︎ Online" else "⊙ Offline") },
-        )
-        FilterChip(
-          selected = autoSpeak,
-          onClick = {
-            autoSpeak = !autoSpeak
-            settings.autoSpeak = autoSpeak
-          },
-          label = { Text(if (autoSpeak) "🔊" else "🔇") },
+      // Online/Offline engine toggle. Enabled only with a key + network, and
+      // never mid-session (the engine is captured at Start). The speak toggle lives
+      // down by the mic, next to the control it affects.
+      FilledTonalIconToggleButton(
+        checked = online,
+        enabled = canGoOnline && !recording,
+        onCheckedChange = {
+          online = it
+          settings.onlineEnabled = it
+        },
+      ) {
+        Icon(
+          painterResource(if (online) R.drawable.ic_cloud else R.drawable.ic_cloud_off),
+          contentDescription = if (online) "Online mode" else "Offline mode",
         )
       }
     }
+
+    // Which language is "yours" — fixed; changed in Settings, not mid-conversation.
+    Text(
+      "You: ${mine.label}",
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.outline,
+    )
 
     // Why the Online toggle is unavailable (only when the user might expect it).
     if (!recording && !canGoOnline) {
@@ -257,13 +260,6 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
         Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
       }
     }
-
-    // Input language: Auto-detect (default) or pin to one side of the pair.
-    InputModeChip(
-      pair = pair,
-      mode = inputMode,
-      onChange = { inputMode = it; settings.inputMode = it },
-    )
 
     // Conversation log: oldest at top, newest at the bottom (auto-scrolled). The
     // live partial transcript rides along as a trailing entry so it never
@@ -296,17 +292,37 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
       verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
       Text(status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-      Surface(
-        onClick = { if (recording) stop() else start() },
-        shape = CircleShape,
-        color = if (recording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-        modifier = Modifier.size(72.dp),
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Text(
-            if (recording) "■" else "🎤",
-            style = MaterialTheme.typography.headlineSmall,
-            color = if (recording) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary,
+      Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        // Mirror the speak toggle's footprint on the left so the mic stays centered.
+        Spacer(Modifier.size(48.dp))
+        Spacer(Modifier.weight(1f))
+        Surface(
+          onClick = { if (recording) stop() else start() },
+          shape = CircleShape,
+          color = if (recording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+          modifier = Modifier.size(72.dp),
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(
+              painterResource(if (recording) R.drawable.ic_stop else R.drawable.ic_mic),
+              contentDescription = if (recording) "Stop" else "Start recording",
+              modifier = Modifier.size(32.dp),
+              tint = if (recording) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary,
+            )
+          }
+        }
+        Spacer(Modifier.weight(1f))
+        // Speak-aloud toggle, beside the mic it relates to.
+        IconToggleButton(
+          checked = autoSpeak,
+          onCheckedChange = {
+            autoSpeak = it
+            settings.autoSpeak = it
+          },
+        ) {
+          Icon(
+            painterResource(if (autoSpeak) R.drawable.ic_volume_up else R.drawable.ic_volume_off),
+            contentDescription = if (autoSpeak) "Speak translations aloud" else "Translations muted",
           )
         }
       }
@@ -341,55 +357,31 @@ private fun hasInternet(context: Context): Boolean {
   return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
 }
 
-// Pair bar: [A] ⇄ [B], each side a dropdown over LANGUAGES; the arrow swaps sides.
+// The partner's language: "Auto" (detect it) or pinned to a specific language.
+// The only language control on this screen — the user's own side is set in Settings.
 @Composable
-private fun LanguageBar(
-  pair: LanguagePair,
-  onPick: (isA: Boolean, opt: LanguageOption) -> Unit,
-  onSwap: () -> Unit,
+private fun PartnerPicker(
+  mine: LanguageOption,
+  partner: LanguageOption?,
+  enabled: Boolean,
+  onChange: (LanguageOption?) -> Unit,
 ) {
-  Row(
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(4.dp),
-  ) {
-    LanguagePickerChip(pair.a) { onPick(true, it) }
-    Text(
-      "⇄",
-      modifier = Modifier.clickable { onSwap() }.padding(horizontal = 4.dp),
-      style = MaterialTheme.typography.titleMedium,
+  var open by remember { mutableStateOf(false) }
+  val label = partner?.let { "Partner: ${it.label}" } ?: "Partner: Auto"
+  Box {
+    AssistChip(
+      onClick = { open = true },
+      enabled = enabled,
+      label = { Text(label) },
+      trailingIcon = {
+        Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(AssistChipDefaults.IconSize))
+      },
     )
-    LanguagePickerChip(pair.b) { onPick(false, it) }
-  }
-}
-
-@Composable
-private fun LanguagePickerChip(selected: LanguageOption, onPick: (LanguageOption) -> Unit) {
-  var open by remember { mutableStateOf(false) }
-  Box {
-    AssistChip(onClick = { open = true }, label = { Text(selected.label) })
     DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-      LANGUAGES.forEach { opt ->
-        DropdownMenuItem(text = { Text(opt.label) }, onClick = { open = false; onPick(opt) })
+      DropdownMenuItem(text = { Text("Auto-detect") }, onClick = { open = false; onChange(null) })
+      partnerOptions(mine).forEach { opt ->
+        DropdownMenuItem(text = { Text(opt.label) }, onClick = { open = false; onChange(opt) })
       }
-    }
-  }
-}
-
-// Input override: Auto detect (default) or pin the spoken side to A/B.
-@Composable
-private fun InputModeChip(pair: LanguagePair, mode: InputMode, onChange: (InputMode) -> Unit) {
-  var open by remember { mutableStateOf(false) }
-  val label = when (mode) {
-    InputMode.AUTO -> "Input: Auto"
-    InputMode.FORCE_A -> "Input: ${pair.a.label}"
-    InputMode.FORCE_B -> "Input: ${pair.b.label}"
-  }
-  Box {
-    AssistChip(onClick = { open = true }, label = { Text(label) })
-    DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-      DropdownMenuItem(text = { Text("Auto detect") }, onClick = { open = false; onChange(InputMode.AUTO) })
-      DropdownMenuItem(text = { Text(pair.a.label) }, onClick = { open = false; onChange(InputMode.FORCE_A) })
-      DropdownMenuItem(text = { Text(pair.b.label) }, onClick = { open = false; onChange(InputMode.FORCE_B) })
     }
   }
 }

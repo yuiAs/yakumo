@@ -40,6 +40,7 @@ import app.rly3h.yakumo.data.ModelCancelled
 import app.rly3h.yakumo.data.Models
 import app.rly3h.yakumo.data.Settings
 import app.rly3h.yakumo.ui.session.EndpointBounds
+import app.rly3h.yakumo.ui.session.LANGUAGES
 import app.rly3h.yakumo.ui.session.VadBounds
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -64,6 +65,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     "$it: ${if (Models.isPresent(context, it)) "ready" else "missing"}"
   }
 
+  var myLang by remember { mutableStateOf(settings.myLangFlores) }
   var rate by remember { mutableStateOf(settings.speechRate) }
   var autoSpeak by remember { mutableStateOf(settings.autoSpeak) }
   var streamingAsr by remember { mutableStateOf(settings.streamingAsr) }
@@ -97,6 +99,28 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
+    SectionTitle("Your language")
+    Text(
+      "The language you speak. The other person's language is chosen on the New " +
+        "Session screen (auto-detected by default).",
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.outline,
+    )
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      LANGUAGES.forEach { opt ->
+        FilterChip(
+          selected = myLang == opt.flores,
+          onClick = {
+            myLang = opt.flores
+            settings.myLangFlores = opt.flores
+          },
+          label = { Text(opt.label) },
+        )
+      }
+    }
+
+    HorizontalDivider()
+
     SectionTitle("Playback")
     Text("Speech rate", style = MaterialTheme.typography.bodyMedium)
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

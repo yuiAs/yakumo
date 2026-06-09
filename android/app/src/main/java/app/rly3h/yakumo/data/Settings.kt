@@ -1,9 +1,8 @@
 package app.rly3h.yakumo.data
 
 import android.content.Context
+import app.rly3h.yakumo.ui.session.Conversation
 import app.rly3h.yakumo.ui.session.EndpointParams
-import app.rly3h.yakumo.ui.session.InputMode
-import app.rly3h.yakumo.ui.session.LanguagePair
 import app.rly3h.yakumo.ui.session.VadParams
 import app.rly3h.yakumo.ui.session.languageByFlores
 
@@ -50,22 +49,33 @@ class Settings(context: Context) {
     apiKeyCipher = null
   }
 
-  // --- Conversation language pair + input override (FLORES codes / enum name) ---
-  var langAFlores: String
-    get() = prefs.getString(KEY_LANG_A, "eng_Latn")!!
-    set(v) = prefs.edit().putString(KEY_LANG_A, v).apply()
+  // --- Conversation languages (FLORES codes) ---
+  // The user's own language is fixed here; the partner's language is chosen per
+  // session on the New Session screen (null = auto-detect).
 
-  var langBFlores: String
-    get() = prefs.getString(KEY_LANG_B, "jpn_Jpan")!!
-    set(v) = prefs.edit().putString(KEY_LANG_B, v).apply()
+  /** The user's own language. Defaults to the device locale, falling back to English. */
+  var myLangFlores: String
+    get() = prefs.getString(KEY_MY_LANG, defaultMyLangFlores)!!
+    set(v) = prefs.edit().putString(KEY_MY_LANG, v).apply()
 
-  internal var inputMode: InputMode
-    get() = runCatching { InputMode.valueOf(prefs.getString(KEY_INPUT_MODE, null)!!) }
-      .getOrDefault(InputMode.AUTO)
-    set(v) = prefs.edit().putString(KEY_INPUT_MODE, v.name).apply()
+  /** The partner's language, or null to auto-detect it (the default). */
+  var partnerFlores: String?
+    get() = prefs.getString(KEY_PARTNER, null)
+    set(v) = prefs.edit().apply { if (v == null) remove(KEY_PARTNER) else putString(KEY_PARTNER, v) }.apply()
 
-  internal fun languagePair(): LanguagePair =
-    LanguagePair(languageByFlores(langAFlores), languageByFlores(langBFlores))
+  /**
+   * Current conversation view. A partner equal to the user's own language is
+   * treated as auto-detect, so a stale pin can't collapse the pair.
+   */
+  internal fun conversation(): Conversation {
+    val mine = languageByFlores(myLangFlores)
+    val them = partnerFlores?.let { languageByFlores(it) }?.takeIf { it != mine }
+    return Conversation(mine, them)
+  }
+
+  // FLORES default keyed off the device language (Japanese device -> Japanese user).
+  private val defaultMyLangFlores: String =
+    if (java.util.Locale.getDefault().language == "ja") "jpn_Jpan" else "eng_Latn"
 
   // --- Silero VAD knobs (defaults come from VadParams) ---
   private val def = VadParams()
@@ -133,9 +143,8 @@ class Settings(context: Context) {
     const val KEY_STREAMING_ASR = "streamingAsr"
     const val KEY_ONLINE = "onlineEnabled"
     const val KEY_API_KEY_CIPHER = "apiKeyCipher"
-    const val KEY_LANG_A = "langAFlores"
-    const val KEY_LANG_B = "langBFlores"
-    const val KEY_INPUT_MODE = "inputMode"
+    const val KEY_MY_LANG = "myLangFlores"
+    const val KEY_PARTNER = "partnerFlores"
     // Silero-era keys (distinct from the old RMS knobs so stale values don't leak).
     const val KEY_VAD_THRESH = "vadProbThreshold"
     const val KEY_VAD_SILENCE = "vadMinSilenceMs"

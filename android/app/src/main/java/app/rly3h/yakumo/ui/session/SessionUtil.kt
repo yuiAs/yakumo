@@ -44,6 +44,34 @@ internal data class LanguagePair(val a: LanguageOption, val b: LanguageOption)
 internal enum class InputMode { AUTO, FORCE_A, FORCE_B }
 
 /**
+ * A conversation framed from the user's seat: [mine] is fixed (set once in
+ * Settings), [partner] is the other speaker. A null partner means "auto-detect
+ * the partner's language" — the common case for live, two-way conversation.
+ *
+ * This is the screen/settings-level model; it collapses to a [LanguagePair] +
+ * [InputMode] at the translator boundary via [toPair] so the engines stay
+ * unaware of the my/partner framing.
+ */
+internal data class Conversation(val mine: LanguageOption, val partner: LanguageOption?)
+
+/** Languages the partner could be: every supported language except the user's own. */
+internal fun partnerOptions(mine: LanguageOption): List<LanguageOption> =
+  LANGUAGES.filter { it != mine }
+
+/**
+ * Collapse the my/partner view into the translator's [LanguagePair]. The partner
+ * is `a` and the user is `b` deliberately: the online engine pins its target to
+ * `b`, so the user's own language is always the side translated *into* (e.g. the
+ * primary EN→JA "listen to the partner" flow). Direction stays [InputMode.AUTO];
+ * per-utterance detection picks the spoken side. An auto (null) partner resolves
+ * to the single other supported language — detection still runs.
+ */
+internal fun Conversation.toPair(): LanguagePair {
+  val them = partner ?: partnerOptions(mine).firstOrNull() ?: mine
+  return LanguagePair(a = them, b = mine)
+}
+
+/**
  * Decide (source, target) for one utterance in the bidirectional pair.
  * AUTO detects which side was spoken (ASR tag first, kana/kanji script as a
  * fallback) and translates to the other; FORCE_* overrides that detection.
