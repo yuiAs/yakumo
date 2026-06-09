@@ -231,4 +231,8 @@ dependencies {
   // Model provisioning: parse the JSON manifest + extract tar.bz2 archives in-app.
   implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
   implementation("org.apache.commons:commons-compress:1.27.1")
+
+  // Online mode (OpenAI Realtime): WebSocket transport + on-device API-key encryption.
+  implementation(libs.okhttp)
+  implementation(libs.tink.android)
 }

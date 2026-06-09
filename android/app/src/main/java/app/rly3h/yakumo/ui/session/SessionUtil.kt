@@ -76,11 +76,20 @@ internal fun localeFromFlores(code: String): Locale = languageByFlores(code).loc
 
 internal fun labelForFlores(code: String): String = languageByFlores(code).short
 
+// FLORES code -> OpenAI Realtime language code (the translation target). Maps the
+// few languages we support; unknown codes fall back to the English target.
+internal fun floresToOpenAiLang(code: String): String = when (code) {
+  "jpn_Jpan" -> "ja"
+  "eng_Latn" -> "en"
+  else -> "en"
+}
+
 // --- Continuous capture ---
-// 16 kHz mono. Both the segmented (Silero VAD) and streaming-ASR paths consume
-// fixed ~100 ms PCM16 chunks; segmentation happens downstream (Silero on the
-// Rust side, or sherpa's online endpointer), not in the capture loop.
-private const val SAMPLE_RATE = 16000
+// The offline paths capture 16 kHz mono; the online (OpenAI Realtime) path needs
+// 24 kHz. Both consume fixed ~100 ms PCM16 chunks; segmentation happens downstream
+// (Silero on the Rust side, sherpa's endpointer, or the Realtime model), not here.
+internal const val SAMPLE_RATE_16K = 16000
+internal const val SAMPLE_RATE_24K = 24000
 
 /**
  * User-tunable Silero VAD knobs (persisted in Settings). `threshold` is the
@@ -129,31 +138,63 @@ private fun frameToLeBytes(frame: ShortArray, n: Int): ByteArray {
   return b
 }
 
-private const val STREAM_CHUNK_SAMPLES = 1600 // 100 ms at 16 kHz
+/** True if AudioRecord can capture at [sampleRate] mono PCM16 on this device. */
+internal fun supportsCaptureRate(sampleRate: Int): Boolean {
+  val n = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+  return n != AudioRecord.ERROR && n != AudioRecord.ERROR_BAD_VALUE && n > 0
+}
+
+/**
+ * Nearest-neighbor-free linear upsample of 16 kHz PCM16 (LE bytes) to 24 kHz.
+ * Cold fallback used only when a device can't open a 24 kHz AudioRecord; the OS
+ * resampler (native 24 kHz capture) is preferred for the 3:2 non-integer ratio.
+ */
+internal fun linearResample16to24(src: ByteArray): ByteArray {
+  val inN = src.size / 2
+  if (inN == 0) return ByteArray(0)
+  val outN = (inN * 3) / 2 // 16k -> 24k
+  val out = ByteArray(outN * 2)
+  fun sample(i: Int): Int {
+    val j = i.coerceIn(0, inN - 1) * 2
+    return (src[j].toInt() and 0xFF) or (src[j + 1].toInt() shl 8)
+  }
+  for (o in 0 until outN) {
+    val pos = o * (inN - 1).toFloat() / (outN - 1).coerceAtLeast(1)
+    val i0 = pos.toInt()
+    val frac = pos - i0
+    val v = (sample(i0) * (1 - frac) + sample(i0 + 1) * frac).toInt()
+    out[o * 2] = (v and 0xFF).toByte()
+    out[o * 2 + 1] = ((v shr 8) and 0xFF).toByte()
+  }
+  return out
+}
 
 /**
  * Continuous capture emitting fixed ~100 ms PCM16 chunks until `running` goes
- * false. Used by both the segmented path (chunks fed to Silero VAD, which emits
- * speech segments) and the streaming recognizer (its own endpointer). Blocking —
- * run on IO.
+ * false. Used by the offline segmented path (chunks fed to Silero VAD), the
+ * streaming recognizer (its own endpointer), and the online Realtime path.
+ * [audioSource] is VOICE_COMMUNICATION online (hardware AEC against the played
+ * translation) and VOICE_RECOGNITION offline. Blocking — run on IO.
  */
 internal fun rawChunkCaptureLoop(
   running: java.util.concurrent.atomic.AtomicBoolean,
+  sampleRate: Int = SAMPLE_RATE_16K,
+  audioSource: Int = MediaRecorder.AudioSource.VOICE_RECOGNITION,
   emit: (ByteArray) -> Unit,
 ) {
   val minBuf = AudioRecord.getMinBufferSize(
-    SAMPLE_RATE,
+    sampleRate,
     AudioFormat.CHANNEL_IN_MONO,
     AudioFormat.ENCODING_PCM_16BIT,
   )
   val record = AudioRecord(
-    MediaRecorder.AudioSource.VOICE_RECOGNITION,
-    SAMPLE_RATE,
+    audioSource,
+    sampleRate,
     AudioFormat.CHANNEL_IN_MONO,
     AudioFormat.ENCODING_PCM_16BIT,
-    maxOf(minBuf, SAMPLE_RATE * 2),
+    maxOf(minBuf, sampleRate * 2),
   )
-  val frame = ShortArray(STREAM_CHUNK_SAMPLES)
+  val frame = ShortArray(sampleRate / 10) // ~100 ms
   try {
     record.startRecording()
     while (running.get()) {

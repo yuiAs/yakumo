@@ -1,7 +1,11 @@
 package app.rly3h.yakumo.ui.session
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.speech.tts.TextToSpeech
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -28,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -44,44 +49,17 @@ import app.rly3h.yakumo.data.Models
 import app.rly3h.yakumo.data.SessionLog
 import app.rly3h.yakumo.data.SessionStore
 import app.rly3h.yakumo.data.Settings
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import uniffi.translatecore.TranslationSink
-import uniffi.translatecore.asrRecognize
-import uniffi.translatecore.asrStreamAccept
-import uniffi.translatecore.asrStreamLoad
-import uniffi.translatecore.asrStreamReset
-import uniffi.translatecore.translateTextStreaming
-import uniffi.translatecore.vadAccept
-import uniffi.translatecore.vadFlush
-import uniffi.translatecore.vadLoad
-import uniffi.translatecore.vadReset
-
-private data class LiveTurn(
-  val id: Long,
-  val transcript: String,
-  val srcLang: String,
-  val tgtLang: String,
-  val detected: String,
-  val translation: String? = null, // null while translating
-)
-
-private const val ORT_DYLIB = "libonnxruntime.so"
+import app.rly3h.yakumo.translate.LiveTurn
+import app.rly3h.yakumo.translate.OfflineTranslator
+import app.rly3h.yakumo.translate.OnlineTranslator
+import app.rly3h.yakumo.translate.SpeechTranslator
+import app.rly3h.yakumo.translate.TranslatorCallbacks
 
 @Composable
 fun NewSessionScreen(modifier: Modifier = Modifier) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
   val settings = remember { Settings(context) }
-
-  val asrDir = remember { Models.dir(context, "asr") }
-  val streamDir = remember { Models.dir(context, "asr_stream") }
-  val nllbDir = remember { Models.dir(context, "nllb") }
-  val vadDir = remember { Models.dir(context, "vad") }
-  // Captured once: switching engines mid-session isn't supported.
-  val streamingAsr = remember { settings.streamingAsr }
 
   val startedAt = remember { System.currentTimeMillis() }
   val sessionId = remember { SessionStore.newId(startedAt) }
@@ -95,7 +73,8 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
   val permissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasPermission = it }
 
-  // OS TTS reads the translation aloud (Japanese for the EN→JA flow).
+  // OS TTS reads the translation aloud on the offline path (online plays the
+  // model's translated audio directly, so it never calls onSpeak).
   val ttsRef = remember { mutableStateOf<TextToSpeech?>(null) }
   DisposableEffect(Unit) {
     val engine = TextToSpeech(context) { }
@@ -104,17 +83,23 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
   }
 
   val turns = remember { mutableStateListOf<LiveTurn>() } // chronological: newest last
-  var nextId by remember { mutableStateOf(0L) }
   var status by remember { mutableStateOf("Tap the mic and speak (EN or JA).") }
   var partial by remember { mutableStateOf("") } // live transcript (streaming mode)
   var recording by remember { mutableStateOf(false) }
   var autoSpeak by remember { mutableStateOf(settings.autoSpeak) }
+  var online by remember { mutableStateOf(settings.onlineEnabled) }
   // Conversation language pair + input-direction override (persisted).
   var pair by remember { mutableStateOf(settings.languagePair()) }
   var inputMode by remember { mutableStateOf(settings.inputMode) }
   val listState = rememberLazyListState()
-  // Read from the capture thread, so an AtomicBoolean rather than Compose state.
-  val running = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+
+  val networkUp by rememberNetworkAvailable()
+  val canGoOnline = networkUp && settings.hasApiKey()
+  // Online needs a key + network; once either drops, fall back to offline.
+  LaunchedEffect(canGoOnline) { if (!canGoOnline) online = false }
+
+  // Active engine for the running session; null when idle. Held so stop() reaches it.
+  val translatorRef = remember { mutableStateOf<SpeechTranslator?>(null) }
 
   // Keep the newest content in view as turns (and the live partial) stream in.
   LaunchedEffect(turns.size, partial) {
@@ -148,138 +133,34 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
     }
   }
 
-  // Final transcript -> turn (shown at once) -> translation (patched in) ->
-  // spoken. `lang` is the ASR language tag, empty for the English-only streaming
-  // recognizer (then the script heuristic picks the direction).
-  suspend fun finalizeTurn(transcript: String, lang: String) {
-    val (srcOpt, tgtOpt) = resolveDirection(pair, inputMode, lang, transcript)
-    val src = srcOpt.flores
-    val tgt = tgtOpt.flores
+  // Bridges an engine's events onto this screen's state. Compose snapshot state is
+  // thread-safe to mutate, so engines may invoke these from background threads.
+  val callbacks = remember {
+    object : TranslatorCallbacks {
+      override fun onTurnStart(turn: LiveTurn) { turns.add(turn) }
 
-    val id = withContext(Dispatchers.Main) {
-      val newId = nextId++
-      turns.add(LiveTurn(newId, transcript, src, tgt, lang, translation = null))
-      newId
-    }
-    // Patch the same row as NLLB decodes, so the translation streams in word by
-    // word. Compose snapshot state is safe to write from this background thread.
-    val sink = object : TranslationSink {
-      override fun onPartial(text: String) {
+      override fun onTurnUpdate(id: Long, transcript: String?, translation: String?) {
         val idx = turns.indexOfFirst { it.id == id }
-        if (idx >= 0) turns[idx] = turns[idx].copy(translation = text)
+        if (idx < 0) return
+        turns[idx] = turns[idx].copy(
+          transcript = transcript ?: turns[idx].transcript,
+          translation = translation ?: turns[idx].translation,
+        )
       }
-    }
-    val translation = withContext(Dispatchers.IO) {
-      Models.ensure(context, "nllb")
-      translateTextStreaming(nllbDir.absolutePath, transcript, src, tgt, ORT_DYLIB, sink)
-    }
-    withContext(Dispatchers.Main) {
-      val idx = turns.indexOfFirst { it.id == id }
-      if (idx >= 0) turns[idx] = turns[idx].copy(translation = translation)
-      persist()
-    }
-    speak(translation, tgt)
-  }
 
-  // Offline (SenseVoice) path: one VAD-cut segment -> transcript -> finalize.
-  suspend fun processSegment(pcm: ByteArray) {
-    val asr = withContext(Dispatchers.IO) {
-      Models.ensure(context, "asr")
-      asrRecognize(asrDir.absolutePath, pcm, 16000)
-    }
-    val transcript = asr.text.trim()
-    if (transcript.isEmpty()) return // drop non-speech segments
-    finalizeTurn(transcript, asr.lang)
-  }
+      override fun onPartial(text: String) { partial = text }
+      override fun onStatus(text: String) { status = text }
+      override fun onSpeak(text: String, tgtFlores: String) { speak(text, tgtFlores) }
+      override fun onPersist() { persist() }
 
-  // Capture and processing are decoupled by a channel so recording keeps running
-  // while each finished segment is transcribed/translated. Raw ~100 ms chunks are
-  // fed to the resident Silero VAD, which emits a clean PCM segment per detected
-  // utterance; on stop we flush whatever was mid-sentence.
-  suspend fun runSegmented() = kotlinx.coroutines.coroutineScope {
-    val vad = settings.vadParams() // latest knobs at the start of this session
-    val vadPath = vadDir.absolutePath
-    withContext(Dispatchers.IO) {
-      Models.ensure(context, "vad")
-      vadLoad(vadPath, vad.threshold, vad.minSilenceMs / 1000f, vad.minSpeechMs / 1000f, vad.maxSpeechMs / 1000f)
-      vadReset(vadPath)
-    }
-    val channel = Channel<ByteArray>(Channel.UNLIMITED)
-    val capture = launch(Dispatchers.IO) {
-      try {
-        rawChunkCaptureLoop(running) { chunk ->
-          try {
-            for (seg in vadAccept(vadPath, chunk, 16000)) channel.trySend(seg)
-          } catch (_: Throwable) { /* drop a bad chunk; keep recording */ }
-        }
-      } finally {
-        // Emit any utterance still in progress when recording stopped.
-        runCatching { for (seg in vadFlush(vadPath)) channel.trySend(seg) }
-        channel.close()
+      override fun onFinished(error: String?) {
+        recording = false
+        partial = ""
+        translatorRef.value = null
+        status = error?.let { "Error: $it" }
+          ?: "Stopped. (${turns.size} turn${if (turns.size == 1) "" else "s"})"
       }
     }
-    val consumer = launch(Dispatchers.IO) {
-      for (seg in channel) {
-        try {
-          processSegment(seg)
-        } catch (e: Throwable) {
-          withContext(Dispatchers.Main) { status = "Error: ${e.message}" }
-        }
-      }
-    }
-    capture.join()
-    consumer.join()
-  }
-
-  // Streaming (nemotron-en) path: feed raw mic chunks into the online recognizer,
-  // show its partial transcript live, and finalize each utterance on its endpoint.
-  suspend fun runStreaming() = kotlinx.coroutines.coroutineScope {
-    val ep = settings.endpointParams() // latest knobs at the start of this session
-    withContext(Dispatchers.IO) {
-      asrStreamLoad(streamDir.absolutePath, ep.rule1, ep.rule2, ep.rule3)
-      asrStreamReset(streamDir.absolutePath)
-    }
-    val channel = Channel<ByteArray>(Channel.UNLIMITED)
-    // Endpointed utterances hand off here so translation (blocking, ~1.3s) runs on
-    // its own worker instead of inside the ASR loop. Otherwise the loop would stop
-    // draining mic chunks while translating, and the live partial for the next
-    // utterance would only appear in one burst once translation finished.
-    val finalized = Channel<String>(Channel.UNLIMITED)
-    val capture = launch(Dispatchers.IO) {
-      try { rawChunkCaptureLoop(running) { channel.trySend(it) } } finally { channel.close() }
-    }
-    // Single worker: sequential so turns commit in spoken order.
-    val translator = launch(Dispatchers.IO) {
-      for (t in finalized) finalizeTurn(t, "")
-    }
-    val consumer = launch(Dispatchers.IO) {
-      var current = ""
-      for (chunk in channel) {
-        val r = try {
-          asrStreamAccept(streamDir.absolutePath, chunk, 16000)
-        } catch (e: Throwable) {
-          withContext(Dispatchers.Main) { status = "Error: ${e.message}" }
-          continue
-        }
-        current = r.text
-        withContext(Dispatchers.Main) { partial = r.text }
-        if (r.endpoint) {
-          val t = r.text.trim()
-          current = ""
-          withContext(Dispatchers.Main) { partial = "" }
-          if (t.isNotEmpty()) finalized.trySend(t)
-        }
-      }
-      // Stopped mid-utterance: flush whatever was decoded so far.
-      val tail = current.trim()
-      withContext(Dispatchers.Main) { partial = "" }
-      if (tail.isNotEmpty()) finalized.trySend(tail)
-      finalized.close()
-      withContext(Dispatchers.IO) { asrStreamReset(streamDir.absolutePath) }
-    }
-    capture.join()
-    consumer.join()
-    translator.join() // drain any translations still in flight after Stop
   }
 
   fun start() {
@@ -287,23 +168,29 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
       permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
       return
     }
-    if (streamingAsr && !Models.isPresent(context, "asr_stream")) {
+    // Snapshot the engine choice for the whole session — switching mid-session
+    // isn't supported (mirrors the streamingAsr capture-once rule).
+    val useOnline = online && canGoOnline
+    val streamingAsr = settings.streamingAsr
+    if (!useOnline && streamingAsr && !Models.isPresent(context, "asr_stream")) {
       status = "Streaming model missing — download it in Settings → Experimental."
       return
     }
+    val translator: SpeechTranslator =
+      if (useOnline) OnlineTranslator(context, settings, pair, inputMode)
+      else OfflineTranslator(context, settings, pair, inputMode, streamingAsr)
+    translatorRef.value = translator
     recording = true
-    running.set(true)
-    status = if (streamingAsr) "Listening (streaming EN)…" else "Listening… speak, then tap Stop."
-    scope.launch {
-      if (streamingAsr) runStreaming() else runSegmented()
-      recording = false
-      partial = ""
-      status = "Stopped. (${turns.size} turn${if (turns.size == 1) "" else "s"})"
+    status = when {
+      useOnline -> "Connecting…"
+      streamingAsr -> "Listening (streaming EN)…"
+      else -> "Listening… speak, then tap Stop."
     }
+    translator.start(scope, callbacks)
   }
 
   fun stop() {
-    running.set(false)
+    translatorRef.value?.stop()
     status = "Finishing…"
   }
 
@@ -336,14 +223,39 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
           settings.inputMode = inputMode
         },
       )
-      FilterChip(
-        selected = autoSpeak,
-        onClick = {
-          autoSpeak = !autoSpeak
-          settings.autoSpeak = autoSpeak
-        },
-        label = { Text(if (autoSpeak) "🔊" else "🔇") },
-      )
+      Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+        // Online/Offline engine toggle. Enabled only with a key + network, and
+        // never mid-session (the engine is captured at Start).
+        FilterChip(
+          selected = online,
+          enabled = canGoOnline && !recording,
+          onClick = {
+            online = !online
+            settings.onlineEnabled = online
+          },
+          label = { Text(if (online) "☁︎ Online" else "⊙ Offline") },
+        )
+        FilterChip(
+          selected = autoSpeak,
+          onClick = {
+            autoSpeak = !autoSpeak
+            settings.autoSpeak = autoSpeak
+          },
+          label = { Text(if (autoSpeak) "🔊" else "🔇") },
+        )
+      }
+    }
+
+    // Why the Online toggle is unavailable (only when the user might expect it).
+    if (!recording && !canGoOnline) {
+      val reason = when {
+        !settings.hasApiKey() -> "Add an OpenAI API key in Settings to use Online mode."
+        !networkUp -> "Online mode needs an internet connection."
+        else -> null
+      }
+      reason?.let {
+        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+      }
     }
 
     // Input language: Auto-detect (default) or pin to one side of the pair.
@@ -400,6 +312,33 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
       }
     }
   }
+}
+
+// Tracks whether the device currently has a validated internet connection, used
+// to gate the Online toggle. Seeded synchronously, then updated via callbacks.
+@Composable
+private fun rememberNetworkAvailable(): State<Boolean> {
+  val context = LocalContext.current
+  val state = remember { mutableStateOf(hasInternet(context)) }
+  DisposableEffect(Unit) {
+    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    val cb = object : ConnectivityManager.NetworkCallback() {
+      override fun onAvailable(network: Network) { state.value = true }
+      override fun onLost(network: Network) { state.value = hasInternet(context) }
+      override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+        state.value = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+      }
+    }
+    cm.registerDefaultNetworkCallback(cb)
+    onDispose { runCatching { cm.unregisterNetworkCallback(cb) } }
+  }
+  return state
+}
+
+private fun hasInternet(context: Context): Boolean {
+  val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
+  val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+  return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
 }
 
 // Pair bar: [A] ⇄ [B], each side a dropdown over LANGUAGES; the arrow swaps sides.

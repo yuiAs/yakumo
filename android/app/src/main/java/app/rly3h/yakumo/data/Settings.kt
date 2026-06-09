@@ -25,6 +25,31 @@ class Settings(context: Context) {
     get() = prefs.getBoolean(KEY_STREAMING_ASR, false)
     set(v) = prefs.edit().putBoolean(KEY_STREAMING_ASR, v).apply()
 
+  // --- Online mode (OpenAI Realtime) ---
+  // Last-used engine toggle (mic-side switch). Offline by default; only honored
+  // when an API key is set and the network is up (checked at the call site).
+  var onlineEnabled: Boolean
+    get() = prefs.getBoolean(KEY_ONLINE, false)
+    set(v) = prefs.edit().putBoolean(KEY_ONLINE, v).apply()
+
+  // The API key is stored only as Tink ciphertext; the plaintext never touches prefs.
+  private var apiKeyCipher: String?
+    get() = prefs.getString(KEY_API_KEY_CIPHER, null)
+    set(v) = prefs.edit().apply { if (v == null) remove(KEY_API_KEY_CIPHER) else putString(KEY_API_KEY_CIPHER, v) }.apply()
+
+  fun hasApiKey(): Boolean = !apiKeyCipher.isNullOrBlank()
+
+  fun setApiKey(context: Context, plaintext: String) {
+    apiKeyCipher = SecureKeyStore.encrypt(context, plaintext)
+  }
+
+  /** Decrypted API key, or null if unset/undecryptable (treated as "no key"). */
+  fun apiKey(context: Context): String? = apiKeyCipher?.let { SecureKeyStore.decrypt(context, it) }
+
+  fun clearApiKey() {
+    apiKeyCipher = null
+  }
+
   // --- Conversation language pair + input override (FLORES codes / enum name) ---
   var langAFlores: String
     get() = prefs.getString(KEY_LANG_A, "eng_Latn")!!
@@ -106,6 +131,8 @@ class Settings(context: Context) {
     const val KEY_RATE = "speechRate"
     const val KEY_AUTO_SPEAK = "autoSpeak"
     const val KEY_STREAMING_ASR = "streamingAsr"
+    const val KEY_ONLINE = "onlineEnabled"
+    const val KEY_API_KEY_CIPHER = "apiKeyCipher"
     const val KEY_LANG_A = "langAFlores"
     const val KEY_LANG_B = "langBFlores"
     const val KEY_INPUT_MODE = "inputMode"

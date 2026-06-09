@@ -15,6 +15,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -28,10 +29,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.layout.Row
 import app.rly3h.yakumo.BuildConfig
+import app.rly3h.yakumo.translate.OpenAiRealtime
 import app.rly3h.yakumo.data.ModelCancelled
 import app.rly3h.yakumo.data.Models
 import app.rly3h.yakumo.data.Settings
@@ -83,6 +87,11 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
   var vadSilence by remember { mutableStateOf(settings.vadMinSilenceMs.toFloat()) }
   var vadMinSpeech by remember { mutableStateOf(settings.vadMinSpeechMs.toFloat()) }
   var vadMaxSpeech by remember { mutableStateOf(settings.vadMaxSpeechMs.toFloat()) }
+
+  // Online (OpenAI) — the key field is never pre-filled with the stored secret.
+  var apiKeyInput by remember { mutableStateOf("") }
+  var keyVisible by remember { mutableStateOf(false) }
+  var onlineStatus by remember { mutableStateOf(if (settings.hasApiKey()) "Key saved." else "No key set.") }
 
   Column(
     modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -274,6 +283,67 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
       epRule2 = settings.endpointRule2
       epRule3 = settings.endpointRule3
     }) { Text("Reset to defaults") }
+
+    HorizontalDivider()
+
+    SectionTitle("Online (OpenAI)")
+    Text(
+      "Optional. When online, you can switch to OpenAI Realtime (gpt-realtime-translate) " +
+        "for low-latency speech-to-speech. Audio is sent to OpenAI and billed to your key. " +
+        "Offline stays the default — toggle Online next to the mic. The key is encrypted on-device.",
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.outline,
+    )
+    OutlinedTextField(
+      value = apiKeyInput,
+      onValueChange = { apiKeyInput = it },
+      label = { Text("OpenAI API key") },
+      singleLine = true,
+      visualTransformation = if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+      trailingIcon = {
+        TextButton(onClick = { keyVisible = !keyVisible }) { Text(if (keyVisible) "Hide" else "Show") }
+      },
+      modifier = Modifier.fillMaxWidth(),
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      Button(
+        enabled = apiKeyInput.isNotBlank() && !busy,
+        onClick = {
+          settings.setApiKey(context, apiKeyInput.trim())
+          apiKeyInput = ""
+          keyVisible = false
+          onlineStatus = "Key saved."
+        },
+      ) { Text("Save key") }
+      TextButton(
+        enabled = !busy,
+        onClick = {
+          settings.clearApiKey()
+          onlineStatus = "Key cleared."
+        },
+      ) { Text("Clear key") }
+      TextButton(
+        enabled = settings.hasApiKey() && !busy,
+        onClick = {
+          busy = true
+          onlineStatus = "Testing…"
+          scope.launch {
+            onlineStatus = try {
+              withContext(Dispatchers.IO) {
+                val key = settings.apiKey(context) ?: error("Key could not be read")
+                OpenAiRealtime.mintEphemeral(key) // succeeds = key + network OK
+              }
+              "Connection OK."
+            } catch (e: Throwable) {
+              "Test failed: ${e.message}"
+            } finally {
+              busy = false
+            }
+          }
+        },
+      ) { Text("Test connection") }
+    }
+    Text(onlineStatus, style = MaterialTheme.typography.bodySmall)
 
     HorizontalDivider()
 
