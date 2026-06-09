@@ -53,7 +53,10 @@ ABIs are **arm64-v8a** (devices) and **x86_64** (emulator).
 
 The APK lands at `android/app/build/outputs/apk/debug/app-debug.apk`. Install it
 with `adb install` (or your Android CLI of choice), launch the app, and use
-**Settings → Download all models** before the first translation.
+**Settings → Download all models** before the first translation. The experimental
+streaming ASR model (`asr_stream`) is large and English-only, so it is excluded
+from this bulk download and fetched separately from its own button under
+**Settings → Experimental**.
 
 ### Regenerating UniFFI bindings
 
@@ -96,6 +99,13 @@ some OEMs).
 | `nllb` | NLLB-200-distilled-600M (ONNX, quantized, merged decoder) | Translation | [Xenova on HF](https://huggingface.co/Xenova/nllb-200-distilled-600M) | ~865 MB (encoder + decoder + tokenizer) |
 | `asr_stream` | sherpa-onnx Nemotron streaming EN 0.6B int8 | Experimental low-latency EN ASR | [k2-fsa releases](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) | ~464 MB |
 
+SenseVoice (`asr`) is the default recognizer: it handles both EN and JA and
+reports a language tag used for automatic direction detection. The streaming
+Nemotron model (`asr_stream`) is an opt-in alternative that trades that coverage
+for live, low-latency partials — it is **English-only** and emits no language
+tag, so it suits the EN→JA flow only and is enabled per choice under
+**Settings → Experimental**.
+
 Spoken output uses the device's own OS TTS engine, so no synthesis model is
 downloaded here. NLLB is multilingual; the in-app language pair is EN↔JA, so only
 those directions are exercised.
@@ -104,7 +114,8 @@ those directions are exercised.
 
 Offline is the default and needs no account. If you want lower latency, Settings
 exposes an opt-in **Online (OpenAI)** mode: you supply your own OpenAI API key
-(encrypted on-device via `EncryptedSharedPreferences`), and a turn can be routed
+(encrypted on-device via Tink AEAD under an Android Keystore master key), and a
+turn can be routed
 through **OpenAI Realtime** (`gpt-realtime-translate`) for streaming
 speech-to-speech. Audio is then sent to OpenAI and billed to your key. The toggle
 sits next to the mic, the offline pipeline stays the default, and **Test
