@@ -240,8 +240,17 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
       asrStreamReset(streamDir.absolutePath)
     }
     val channel = Channel<ByteArray>(Channel.UNLIMITED)
+    // Endpointed utterances hand off here so translation (blocking, ~1.3s) runs on
+    // its own worker instead of inside the ASR loop. Otherwise the loop would stop
+    // draining mic chunks while translating, and the live partial for the next
+    // utterance would only appear in one burst once translation finished.
+    val finalized = Channel<String>(Channel.UNLIMITED)
     val capture = launch(Dispatchers.IO) {
       try { rawChunkCaptureLoop(running) { channel.trySend(it) } } finally { channel.close() }
+    }
+    // Single worker: sequential so turns commit in spoken order.
+    val translator = launch(Dispatchers.IO) {
+      for (t in finalized) finalizeTurn(t, "")
     }
     val consumer = launch(Dispatchers.IO) {
       var current = ""
@@ -258,17 +267,19 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
           val t = r.text.trim()
           current = ""
           withContext(Dispatchers.Main) { partial = "" }
-          if (t.isNotEmpty()) finalizeTurn(t, "")
+          if (t.isNotEmpty()) finalized.trySend(t)
         }
       }
       // Stopped mid-utterance: flush whatever was decoded so far.
       val tail = current.trim()
       withContext(Dispatchers.Main) { partial = "" }
-      if (tail.isNotEmpty()) finalizeTurn(tail, "")
+      if (tail.isNotEmpty()) finalized.trySend(tail)
+      finalized.close()
       withContext(Dispatchers.IO) { asrStreamReset(streamDir.absolutePath) }
     }
     capture.join()
     consumer.join()
+    translator.join() // drain any translations still in flight after Stop
   }
 
   fun start() {
