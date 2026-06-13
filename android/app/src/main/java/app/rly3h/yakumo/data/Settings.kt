@@ -6,6 +6,9 @@ import app.rly3h.yakumo.ui.session.EndpointParams
 import app.rly3h.yakumo.ui.session.VadParams
 import app.rly3h.yakumo.ui.session.languageByFlores
 
+/** The online speech-translation backend the user picks for Online mode. */
+enum class OnlineProvider { OPENAI, GEMINI }
+
 /** Lightweight user settings backed by SharedPreferences (no extra deps). */
 class Settings(context: Context) {
   private val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
@@ -24,29 +27,45 @@ class Settings(context: Context) {
     get() = prefs.getBoolean(KEY_STREAMING_ASR, false)
     set(v) = prefs.edit().putBoolean(KEY_STREAMING_ASR, v).apply()
 
-  // --- Online mode (OpenAI Realtime) ---
+  // --- Online mode ---
   // Last-used engine toggle (mic-side switch). Offline by default; only honored
   // when an API key is set and the network is up (checked at the call site).
   var onlineEnabled: Boolean
     get() = prefs.getBoolean(KEY_ONLINE, false)
     set(v) = prefs.edit().putBoolean(KEY_ONLINE, v).apply()
 
-  // The API key is stored only as Tink ciphertext; the plaintext never touches prefs.
-  private var apiKeyCipher: String?
-    get() = prefs.getString(KEY_API_KEY_CIPHER, null)
-    set(v) = prefs.edit().apply { if (v == null) remove(KEY_API_KEY_CIPHER) else putString(KEY_API_KEY_CIPHER, v) }.apply()
+  /** Which backend Online mode uses. OpenAI by default for backward compatibility. */
+  var onlineProvider: OnlineProvider
+    get() = runCatching { OnlineProvider.valueOf(prefs.getString(KEY_PROVIDER, OnlineProvider.OPENAI.name)!!) }
+      .getOrDefault(OnlineProvider.OPENAI)
+    set(v) = prefs.edit().putString(KEY_PROVIDER, v.name).apply()
 
-  fun hasApiKey(): Boolean = !apiKeyCipher.isNullOrBlank()
-
-  fun setApiKey(context: Context, plaintext: String) {
-    apiKeyCipher = SecureKeyStore.encrypt(context, plaintext)
+  // Keys are stored only as Tink ciphertext; the plaintext never touches prefs.
+  // Each provider has its own slot (the OpenAI key and the Google key are distinct).
+  private fun cipherPrefKey(provider: OnlineProvider): String = when (provider) {
+    OnlineProvider.OPENAI -> KEY_API_KEY_CIPHER
+    OnlineProvider.GEMINI -> KEY_GEMINI_KEY_CIPHER
   }
 
-  /** Decrypted API key, or null if unset/undecryptable (treated as "no key"). */
-  fun apiKey(context: Context): String? = apiKeyCipher?.let { SecureKeyStore.decrypt(context, it) }
+  private fun apiKeyCipher(provider: OnlineProvider): String? = prefs.getString(cipherPrefKey(provider), null)
 
-  fun clearApiKey() {
-    apiKeyCipher = null
+  private fun setApiKeyCipher(provider: OnlineProvider, cipher: String?) {
+    val key = cipherPrefKey(provider)
+    prefs.edit().apply { if (cipher == null) remove(key) else putString(key, cipher) }.apply()
+  }
+
+  fun hasApiKey(provider: OnlineProvider): Boolean = !apiKeyCipher(provider).isNullOrBlank()
+
+  fun setApiKey(context: Context, provider: OnlineProvider, plaintext: String) {
+    setApiKeyCipher(provider, SecureKeyStore.encrypt(context, plaintext))
+  }
+
+  /** Decrypted key for [provider], or null if unset/undecryptable (treated as "no key"). */
+  fun apiKey(context: Context, provider: OnlineProvider): String? =
+    apiKeyCipher(provider)?.let { SecureKeyStore.decrypt(context, it) }
+
+  fun clearApiKey(provider: OnlineProvider) {
+    setApiKeyCipher(provider, null)
   }
 
   // --- Conversation languages (FLORES codes) ---
@@ -142,7 +161,9 @@ class Settings(context: Context) {
     const val KEY_AUTO_SPEAK = "autoSpeak"
     const val KEY_STREAMING_ASR = "streamingAsr"
     const val KEY_ONLINE = "onlineEnabled"
-    const val KEY_API_KEY_CIPHER = "apiKeyCipher"
+    const val KEY_PROVIDER = "onlineProvider"
+    const val KEY_API_KEY_CIPHER = "apiKeyCipher" // OpenAI (legacy key name kept for compat)
+    const val KEY_GEMINI_KEY_CIPHER = "geminiApiKeyCipher"
     const val KEY_MY_LANG = "myLangFlores"
     const val KEY_PARTNER = "partnerFlores"
     // Silero-era keys (distinct from the old RMS knobs so stale values don't leak).

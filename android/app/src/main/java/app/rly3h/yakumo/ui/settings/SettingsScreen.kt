@@ -35,9 +35,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.layout.Row
 import app.rly3h.yakumo.BuildConfig
+import app.rly3h.yakumo.translate.GeminiLive
 import app.rly3h.yakumo.translate.OpenAiRealtime
 import app.rly3h.yakumo.data.ModelCancelled
 import app.rly3h.yakumo.data.Models
+import app.rly3h.yakumo.data.OnlineProvider
 import app.rly3h.yakumo.data.Settings
 import app.rly3h.yakumo.ui.session.EndpointBounds
 import app.rly3h.yakumo.ui.session.LANGUAGES
@@ -90,10 +92,12 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
   var vadMinSpeech by remember { mutableStateOf(settings.vadMinSpeechMs.toFloat()) }
   var vadMaxSpeech by remember { mutableStateOf(settings.vadMaxSpeechMs.toFloat()) }
 
-  // Online (OpenAI) — the key field is never pre-filled with the stored secret.
+  // Online — provider-scoped. The key field is never pre-filled with the stored
+  // secret, and resets when the provider changes (each provider has its own key).
+  var provider by remember { mutableStateOf(settings.onlineProvider) }
   var apiKeyInput by remember { mutableStateOf("") }
   var keyVisible by remember { mutableStateOf(false) }
-  var onlineStatus by remember { mutableStateOf(if (settings.hasApiKey()) "Key saved." else "No key set.") }
+  var onlineStatus by remember { mutableStateOf(if (settings.hasApiKey(provider)) "Key saved." else "No key set.") }
 
   Column(
     modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -310,18 +314,44 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 
     HorizontalDivider()
 
-    SectionTitle("Online (OpenAI)")
+    SectionTitle("Online translation")
+    val providerLabel = when (provider) {
+      OnlineProvider.OPENAI -> "OpenAI"
+      OnlineProvider.GEMINI -> "Gemini"
+    }
     Text(
-      "Optional. When online, you can switch to OpenAI Realtime (gpt-realtime-translate) " +
-        "for low-latency speech-to-speech. Audio is sent to OpenAI and billed to your key. " +
-        "Offline stays the default — toggle Online next to the mic. The key is encrypted on-device.",
+      "Optional. When online, translation runs on a cloud model for low-latency " +
+        "speech-to-speech. Audio is sent to the provider and billed to your key. " +
+        "Offline stays the default — toggle Online next to the mic. Each provider " +
+        "stores its own key, encrypted on-device.",
       style = MaterialTheme.typography.bodySmall,
       color = MaterialTheme.colorScheme.outline,
     )
+    // Provider chooser — the engine used when Online is toggled on. Switching here
+    // swaps which provider's key the field below edits.
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      OnlineProvider.entries.forEach { p ->
+        val label = when (p) {
+          OnlineProvider.OPENAI -> "OpenAI Realtime"
+          OnlineProvider.GEMINI -> "Gemini Live"
+        }
+        FilterChip(
+          selected = provider == p,
+          onClick = {
+            provider = p
+            settings.onlineProvider = p
+            apiKeyInput = ""
+            keyVisible = false
+            onlineStatus = if (settings.hasApiKey(p)) "Key saved." else "No key set."
+          },
+          label = { Text(label) },
+        )
+      }
+    }
     OutlinedTextField(
       value = apiKeyInput,
       onValueChange = { apiKeyInput = it },
-      label = { Text("OpenAI API key") },
+      label = { Text("$providerLabel API key") },
       singleLine = true,
       visualTransformation = if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),
       trailingIcon = {
@@ -333,7 +363,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
       Button(
         enabled = apiKeyInput.isNotBlank() && !busy,
         onClick = {
-          settings.setApiKey(context, apiKeyInput.trim())
+          settings.setApiKey(context, provider, apiKeyInput.trim())
           apiKeyInput = ""
           keyVisible = false
           onlineStatus = "Key saved."
@@ -342,20 +372,25 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
       TextButton(
         enabled = !busy,
         onClick = {
-          settings.clearApiKey()
+          settings.clearApiKey(provider)
           onlineStatus = "Key cleared."
         },
       ) { Text("Clear key") }
       TextButton(
-        enabled = settings.hasApiKey() && !busy,
+        enabled = settings.hasApiKey(provider) && !busy,
         onClick = {
           busy = true
           onlineStatus = "Testing…"
+          val testProvider = provider
           scope.launch {
             onlineStatus = try {
               withContext(Dispatchers.IO) {
-                val key = settings.apiKey(context) ?: error("Key could not be read")
-                OpenAiRealtime.mintEphemeral(key) // succeeds = key + network OK
+                val key = settings.apiKey(context, testProvider) ?: error("Key could not be read")
+                // Succeeds = key + network OK.
+                when (testProvider) {
+                  OnlineProvider.OPENAI -> OpenAiRealtime.mintEphemeral(key)
+                  OnlineProvider.GEMINI -> GeminiLive.testKey(key)
+                }
               }
               "Connection OK."
             } catch (e: Throwable) {

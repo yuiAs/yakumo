@@ -104,9 +104,10 @@ internal fun localeFromFlores(code: String): Locale = languageByFlores(code).loc
 
 internal fun labelForFlores(code: String): String = languageByFlores(code).short
 
-// FLORES code -> OpenAI Realtime language code (the translation target). Maps the
-// few languages we support; unknown codes fall back to the English target.
-internal fun floresToOpenAiLang(code: String): String = when (code) {
+// FLORES code -> online translation-target language code. OpenAI Realtime and
+// Gemini Live both take the same short codes ("ja"/"en"). Maps the few languages
+// we support; unknown codes fall back to the English target.
+internal fun floresToLiveLang(code: String): String = when (code) {
   "jpn_Jpan" -> "ja"
   "eng_Latn" -> "en"
   else -> "en"

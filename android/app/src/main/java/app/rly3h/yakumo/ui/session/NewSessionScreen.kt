@@ -55,10 +55,12 @@ import app.rly3h.yakumo.data.LoggedUtterance
 import app.rly3h.yakumo.data.Models
 import app.rly3h.yakumo.data.SessionLog
 import app.rly3h.yakumo.data.SessionStore
+import app.rly3h.yakumo.data.OnlineProvider
 import app.rly3h.yakumo.data.Settings
+import app.rly3h.yakumo.translate.GeminiTranslator
 import app.rly3h.yakumo.translate.LiveTurn
 import app.rly3h.yakumo.translate.OfflineTranslator
-import app.rly3h.yakumo.translate.OnlineTranslator
+import app.rly3h.yakumo.translate.OpenAiTranslator
 import app.rly3h.yakumo.translate.SpeechTranslator
 import app.rly3h.yakumo.translate.TranslatorCallbacks
 
@@ -103,7 +105,8 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
   val listState = rememberLazyListState()
 
   val networkUp by rememberNetworkAvailable()
-  val canGoOnline = networkUp && settings.hasApiKey()
+  // Online needs a key for the *selected* provider plus a network link.
+  val canGoOnline = networkUp && settings.hasApiKey(settings.onlineProvider)
   // Online needs a key + network; once either drops, fall back to offline.
   LaunchedEffect(canGoOnline) { if (!canGoOnline) online = false }
 
@@ -188,9 +191,12 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
     // Direction is always auto-detected per utterance; the partner choice only
     // resolves which language sits opposite the user.
     val pair = Conversation(mine, partner).toPair()
-    val translator: SpeechTranslator =
-      if (useOnline) OnlineTranslator(context, settings, pair, InputMode.AUTO)
-      else OfflineTranslator(context, settings, pair, InputMode.AUTO, streamingAsr)
+    val translator: SpeechTranslator = when {
+      useOnline && settings.onlineProvider == OnlineProvider.GEMINI ->
+        GeminiTranslator(context, settings, pair, InputMode.AUTO)
+      useOnline -> OpenAiTranslator(context, settings, pair, InputMode.AUTO)
+      else -> OfflineTranslator(context, settings, pair, InputMode.AUTO, streamingAsr)
+    }
     translatorRef.value = translator
     recording = true
     status = when {
@@ -251,8 +257,13 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
 
     // Why the Online toggle is unavailable (only when the user might expect it).
     if (!recording && !canGoOnline) {
+      val providerName = when (settings.onlineProvider) {
+        OnlineProvider.OPENAI -> "OpenAI"
+        OnlineProvider.GEMINI -> "Gemini"
+      }
       val reason = when {
-        !settings.hasApiKey() -> "Add an OpenAI API key in Settings to use Online mode."
+        !settings.hasApiKey(settings.onlineProvider) ->
+          "Add a $providerName API key in Settings to use Online mode."
         !networkUp -> "Online mode needs an internet connection."
         else -> null
       }
