@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Debug builds carry the .debug applicationId so they sit beside a release
+         install; a distinct label keeps the two apart in the launcher. -->
+    <string name="app_name">やくも (debug)</string>
+</resources>
