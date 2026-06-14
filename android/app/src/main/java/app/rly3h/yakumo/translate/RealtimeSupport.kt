@@ -29,6 +29,10 @@ internal class RealtimeTurnAssembler(
   private val srcFlores: String,
   private val tgtFlores: String,
   private val cb: TranslatorCallbacks,
+  // When the engine emits no explicit end-of-turn signal (Gemini Live streams
+  // continuously), close a turn once its translation reaches sentence-final
+  // punctuation so the log breaks into sentences instead of one endless row.
+  private val splitOnSentenceEnd: Boolean = false,
 ) {
   private val nextId = AtomicLong(0L)
   private val lock = Any()
@@ -56,12 +60,15 @@ internal class RealtimeTurnAssembler(
 
   fun targetDelta(d: String) {
     if (d.isEmpty()) return
+    var finalizeAfter = false
     synchronized(lock) {
       lastDeltaAt = nowMs()
       val id = ensureTurn()
       tgtAcc.append(d)
       cb.onTurnUpdate(id, translation = tgtAcc.toString())
+      finalizeAfter = splitOnSentenceEnd && endsSentence(tgtAcc)
     }
+    if (finalizeAfter) finalize()
   }
 
   /** Close the open turn (if any) and ask the screen to persist it. */
@@ -91,7 +98,21 @@ internal class RealtimeTurnAssembler(
     return id
   }
 
+  // True when the buffer's last non-space char ends a sentence (JA and Latin marks).
+  private fun endsSentence(sb: StringBuilder): Boolean {
+    for (i in sb.length - 1 downTo 0) {
+      val c = sb[i]
+      if (c.isWhitespace()) continue
+      return c in SENTENCE_END
+    }
+    return false
+  }
+
   private fun nowMs(): Long = System.nanoTime() / 1_000_000
+
+  private companion object {
+    val SENTENCE_END = setOf('。', '．', '！', '？', '!', '?', '…', '.')
+  }
 }
 
 /**

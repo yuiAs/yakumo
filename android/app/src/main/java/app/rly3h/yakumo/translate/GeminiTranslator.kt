@@ -70,7 +70,8 @@ internal class GeminiTranslator(
   override fun start(scope: CoroutineScope, callbacks: TranslatorCallbacks) {
     running.set(true)
     val cb = callbacks
-    val sink = RealtimeTurnAssembler(srcFlores, tgtFlores, cb)
+    // Gemini Live streams without end-of-turn signals; split on sentence punctuation.
+    val sink = RealtimeTurnAssembler(srcFlores, tgtFlores, cb, splitOnSentenceEnd = true)
     scope.launch(Dispatchers.IO) {
       try {
         val key = settings.apiKey(context, OnlineProvider.GEMINI)
