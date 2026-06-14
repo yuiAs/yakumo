@@ -27,10 +27,12 @@ object GeminiLive {
    * parroted back in the one-directional MVP.
    */
   fun setupMessage(targetLang: String): String =
-    """{"setup":{"model":"$MODEL","generationConfig":{""" +
-      """"responseModalities":["AUDIO"],""" +
-      """"inputAudioTranscription":{},"outputAudioTranscription":{},""" +
-      """"translationConfig":{"targetLanguageCode":"$targetLang","echoTargetLanguage":false}}}}"""
+    """{"setup":{"model":"$MODEL",""" +
+      """"generationConfig":{"responseModalities":["AUDIO"],""" +
+      """"translationConfig":{"targetLanguageCode":"$targetLang","echoTargetLanguage":false}},""" +
+      // inputAudioTranscription/outputAudioTranscription are setup-level fields,
+      // not generationConfig members (the server rejects them under generation_config).
+      """"inputAudioTranscription":{},"outputAudioTranscription":{}}}"""
 
   /**
    * Validates the key with a lightweight REST call (`GET /v1beta/models?key=…`).

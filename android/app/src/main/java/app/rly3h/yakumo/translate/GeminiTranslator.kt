@@ -3,6 +3,7 @@ package app.rly3h.yakumo.translate
 import android.content.Context
 import android.media.MediaRecorder
 import android.util.Base64
+import android.util.Log
 import app.rly3h.yakumo.data.OnlineProvider
 import app.rly3h.yakumo.data.Settings
 import app.rly3h.yakumo.ui.session.InputMode
@@ -29,6 +30,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString
 
 /**
  * Online engine: Gemini Live Translate speech-to-speech translation over the
@@ -116,6 +118,12 @@ internal class GeminiTranslator(
       ws.send(GeminiLive.setupMessage(floresToLiveLang(tgtFlores)))
     }
 
+    // The Live API delivers its JSON responses as binary frames; OkHttp routes
+    // those here, not to the String overload. Decode and feed the same handler.
+    override fun onMessage(ws: WebSocket, bytes: ByteString) {
+      handleEvent(bytes.utf8(), cb, sink)
+    }
+
     override fun onMessage(ws: WebSocket, text: String) {
       handleEvent(text, cb, sink)
     }
@@ -129,7 +137,15 @@ internal class GeminiTranslator(
     }
 
     override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
-      if (running.get()) failure = "Online error: ${t.message}"
+      // A failed WS upgrade carries the server's reason (bad model/key/quota) in
+      // the HTTP response, not the throwable — surface the code + body snippet.
+      val http = response?.let { resp ->
+        val body = runCatching { resp.body?.string() }.getOrNull().orEmpty().take(300)
+        "HTTP ${resp.code}${if (body.isNotBlank()) ": $body" else ""}"
+      }
+      val detail = http ?: t.message ?: t.toString()
+      Log.e(TAG, "WebSocket failure: $detail", t)
+      if (running.get()) failure = "Gemini error: $detail"
       if (!ready.isCompleted) ready.complete(false)
       if (!finished.isCompleted) finished.complete(Unit)
     }
@@ -202,6 +218,7 @@ internal class GeminiTranslator(
   private fun labelOf(flores: String): String = floresToLiveLang(flores).uppercase()
 
   private companion object {
+    const val TAG = "GeminiTranslator"
     const val MAX_WS_QUEUE_BYTES = 256 * 1024L
     const val IDLE_POLL_MS = 300L
     const val IDLE_GAP_MS = 1200L
