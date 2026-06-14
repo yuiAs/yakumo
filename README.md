@@ -3,8 +3,9 @@
 An on-device English↔Japanese voice translator for Android. By default, speech
 recognition and machine translation run **fully offline** after a one-time model
 download, and speech is spoken back through the OS text-to-speech engine. An
-opt-in online mode can route a turn through OpenAI Realtime instead. The inference
-core is written in Rust and exposed to a Jetpack Compose UI through UniFFI.
+opt-in online mode can instead route a turn through a cloud speech-to-speech
+model — OpenAI Realtime or Gemini Live Translate. The inference core is written
+in Rust and exposed to a Jetpack Compose UI through UniFFI.
 
 ## Features
 
@@ -13,7 +14,8 @@ core is written in Rust and exposed to a Jetpack Compose UI through UniFFI.
 - VAD-based turn segmentation with tunable thresholds
 - Opt-in low-latency **streaming** English ASR (Nemotron)
 - Spoken output via the OS TTS engine, with variable playback rate
-- Optional **online mode** (OpenAI Realtime speech-to-speech) — see below
+- Optional **online mode** (OpenAI Realtime or Gemini Live Translate
+  speech-to-speech) — see below
 
 ## Building
 
@@ -112,14 +114,27 @@ those directions are exercised.
 
 ## Online mode (optional)
 
-Offline is the default and needs no account. If you want lower latency, Settings
-exposes an opt-in **Online (OpenAI)** mode: you supply your own OpenAI API key
-(encrypted on-device via Tink AEAD under an Android Keystore master key), and a
-turn can be routed
-through **OpenAI Realtime** (`gpt-realtime-translate`) for streaming
-speech-to-speech. Audio is then sent to OpenAI and billed to your key. The toggle
-sits next to the mic, the offline pipeline stays the default, and **Test
-connection** in Settings mints an ephemeral token to confirm the key and network.
+Offline is the default and needs no account. For lower latency you can opt into
+online translation under **Settings → Online translation** and choose a provider:
+
+- **OpenAI Realtime** (`gpt-realtime-translate`) — the app mints a short-lived
+  ephemeral token from your key to open the stream.
+- **Gemini Live Translate** (`gemini-3.5-live-translate-preview`) — the key
+  authenticates the WebSocket directly (no token exchange).
+
+Each provider keeps its own API key, encrypted on-device via Tink AEAD under an
+Android Keystore master key. Paste a key for the selected provider and **Test
+connection** validates the key and network (an ephemeral-token mint for OpenAI, a
+lightweight models call for Gemini). The toggle next to the mic switches the
+running engine; the offline pipeline stays the default. While online, audio is
+streamed to the chosen provider and billed to your key.
+
+Both engines render a turn as the source transcript plus its streaming
+translation and play the translated audio back. A turn is closed by the
+provider's own end-of-turn signal where it sends one (OpenAI), by sentence-final
+punctuation in the translation (needed for Gemini, which streams continuously),
+or after a silent pause you can tune under **Settings → Online translation**
+("Pause to split a turn").
 
 ## License
 
