@@ -34,6 +34,16 @@ class Settings(context: Context) {
     get() = prefs.getBoolean(KEY_ONLINE, false)
     set(v) = prefs.edit().putBoolean(KEY_ONLINE, v).apply()
 
+  /**
+   * Silence (ms) after the last streamed delta that closes an open online turn.
+   * Shared by both online engines; the main fallback splitter for Gemini (which
+   * sends no end-of-turn signal) and the primary one for any stretch without
+   * sentence punctuation. Defaults to [DEFAULT_ONLINE_IDLE_GAP_MS].
+   */
+  var onlineIdleGapMs: Int
+    get() = prefs.getInt(KEY_ONLINE_IDLE_GAP, DEFAULT_ONLINE_IDLE_GAP_MS)
+    set(v) = prefs.edit().putInt(KEY_ONLINE_IDLE_GAP, v).apply()
+
   /** Which backend Online mode uses. OpenAI by default for backward compatibility. */
   var onlineProvider: OnlineProvider
     get() = runCatching { OnlineProvider.valueOf(prefs.getString(KEY_PROVIDER, OnlineProvider.OPENAI.name)!!) }
@@ -162,6 +172,8 @@ class Settings(context: Context) {
     const val KEY_STREAMING_ASR = "streamingAsr"
     const val KEY_ONLINE = "onlineEnabled"
     const val KEY_PROVIDER = "onlineProvider"
+    const val KEY_ONLINE_IDLE_GAP = "onlineIdleGapMs"
+    const val DEFAULT_ONLINE_IDLE_GAP_MS = 1200
     const val KEY_API_KEY_CIPHER = "apiKeyCipher" // OpenAI (legacy key name kept for compat)
     const val KEY_GEMINI_KEY_CIPHER = "geminiApiKeyCipher"
     const val KEY_MY_LANG = "myLangFlores"

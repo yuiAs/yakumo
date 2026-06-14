@@ -157,6 +157,11 @@ object EndpointBounds {
   val rule3 = 5.0f..30.0f
 }
 
+/** Slider bounds for the online engines' idle-gap turn splitter (milliseconds). */
+object OnlineBounds {
+  val idleGapMs = 500f..3000f
+}
+
 private fun frameToLeBytes(frame: ShortArray, n: Int): ByteArray {
   val b = ByteArray(n * 2)
   for (i in 0 until n) {

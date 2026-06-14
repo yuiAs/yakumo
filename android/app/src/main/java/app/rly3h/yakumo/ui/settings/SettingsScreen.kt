@@ -43,6 +43,7 @@ import app.rly3h.yakumo.data.OnlineProvider
 import app.rly3h.yakumo.data.Settings
 import app.rly3h.yakumo.ui.session.EndpointBounds
 import app.rly3h.yakumo.ui.session.LANGUAGES
+import app.rly3h.yakumo.ui.session.OnlineBounds
 import app.rly3h.yakumo.ui.session.VadBounds
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -98,6 +99,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
   var apiKeyInput by remember { mutableStateOf("") }
   var keyVisible by remember { mutableStateOf(false) }
   var onlineStatus by remember { mutableStateOf(if (settings.hasApiKey(provider)) "Key saved." else "No key set.") }
+  var idleGap by remember { mutableStateOf(settings.onlineIdleGapMs.toFloat()) }
 
   Column(
     modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -403,6 +405,16 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
       ) { Text("Test connection") }
     }
     Text(onlineStatus, style = MaterialTheme.typography.bodySmall)
+
+    Text(
+      "How long a pause splits a turn online. Lower = more, shorter turns. " +
+        "Applies to both providers and to the next session.",
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.outline,
+    )
+    VadSlider("Pause to split a turn", idleGap, OnlineBounds.idleGapMs, { "${it.toInt()} ms" }, { idleGap = it }) {
+      settings.onlineIdleGapMs = idleGap.toInt()
+    }
 
     HorizontalDivider()
 

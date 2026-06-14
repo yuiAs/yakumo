@@ -90,9 +90,10 @@ internal class OpenAiTranslator(
         webSocket = client.newWebSocket(request, listener(cb, sink))
 
         // Audio capture + playback start once the socket is open.
+        val idleGapMs = settings.onlineIdleGapMs.toLong()
         launch(Dispatchers.IO) { audio.playbackLoop() }
         launch(Dispatchers.IO) { captureLoop(cb) }
-        launch(Dispatchers.IO) { idleWatchdog(sink) }
+        launch(Dispatchers.IO) { idleWatchdog(sink, idleGapMs) }
 
         finished.await()
         cb.onFinished(failure)
@@ -165,10 +166,10 @@ internal class OpenAiTranslator(
     obj["delta"]?.jsonPrimitive?.contentOrNull.orEmpty()
 
   // No `*.done` event for a while after the last delta → close the open turn.
-  private suspend fun idleWatchdog(sink: RealtimeTurnAssembler) {
+  private suspend fun idleWatchdog(sink: RealtimeTurnAssembler, idleGapMs: Long) {
     while (running.get()) {
       kotlinx.coroutines.delay(IDLE_POLL_MS)
-      sink.finalizeIfIdle(IDLE_GAP_MS)
+      sink.finalizeIfIdle(idleGapMs)
     }
   }
 
@@ -205,6 +206,5 @@ internal class OpenAiTranslator(
     const val INPUT_TRANSCRIBE_MODEL = "gpt-realtime-whisper"
     const val MAX_WS_QUEUE_BYTES = 256 * 1024L
     const val IDLE_POLL_MS = 300L
-    const val IDLE_GAP_MS = 1200L
   }
 }

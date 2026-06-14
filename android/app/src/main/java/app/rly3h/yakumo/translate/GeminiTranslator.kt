@@ -91,9 +91,10 @@ internal class GeminiTranslator(
         webSocket = client.newWebSocket(request, listener(cb, sink))
 
         // Playback can start immediately; capture gates on `setupComplete`.
+        val idleGapMs = settings.onlineIdleGapMs.toLong()
         launch(Dispatchers.IO) { audio.playbackLoop() }
         launch(Dispatchers.IO) { captureLoop(cb) }
-        launch(Dispatchers.IO) { idleWatchdog(sink) }
+        launch(Dispatchers.IO) { idleWatchdog(sink, idleGapMs) }
 
         finished.await()
         cb.onFinished(failure)
@@ -185,10 +186,10 @@ internal class GeminiTranslator(
   private fun langOf(obj: JsonObject): String = obj["languageCode"]?.jsonPrimitive?.contentOrNull.orEmpty()
 
   // No `turnComplete` for a while after the last delta → close the open turn.
-  private suspend fun idleWatchdog(sink: RealtimeTurnAssembler) {
+  private suspend fun idleWatchdog(sink: RealtimeTurnAssembler, idleGapMs: Long) {
     while (running.get()) {
       kotlinx.coroutines.delay(IDLE_POLL_MS)
-      sink.finalizeIfIdle(IDLE_GAP_MS)
+      sink.finalizeIfIdle(idleGapMs)
     }
   }
 
@@ -222,6 +223,5 @@ internal class GeminiTranslator(
     const val TAG = "GeminiTranslator"
     const val MAX_WS_QUEUE_BYTES = 256 * 1024L
     const val IDLE_POLL_MS = 300L
-    const val IDLE_GAP_MS = 1200L
   }
 }
