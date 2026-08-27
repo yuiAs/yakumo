@@ -60,6 +60,12 @@ streaming ASR model (`asr_stream`) is large and English-only, so it is excluded
 from this bulk download and fetched separately from its own button under
 **Settings → Experimental**.
 
+### Release builds
+
+Signed release APKs (keystore setup, local signing, and the tag-driven GitHub
+Actions workflow) are covered separately in
+[README.RELEASE.md](README.RELEASE.md).
+
 ### Regenerating UniFFI bindings
 
 The generated Kotlin bindings (`uniffi/translatecore/translatecore.kt`) are
