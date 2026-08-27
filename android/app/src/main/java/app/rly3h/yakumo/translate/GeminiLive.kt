@@ -45,7 +45,7 @@ object GeminiLive {
       .build()
     val req = Request.Builder().url("$MODELS_URL?key=$apiKey").get().build()
     client.newCall(req).execute().use { resp ->
-      val text = resp.body?.string().orEmpty()
+      val text = resp.body.string()
       if (!resp.isSuccessful) error("HTTP ${resp.code}: ${text.take(300)}")
     }
   }

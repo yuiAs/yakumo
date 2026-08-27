@@ -142,7 +142,7 @@ internal class GeminiTranslator(
       // A failed WS upgrade carries the server's reason (bad model/key/quota) in
       // the HTTP response, not the throwable — surface the code + body snippet.
       val http = response?.let { resp ->
-        val body = runCatching { resp.body?.string() }.getOrNull().orEmpty().take(300)
+        val body = runCatching { resp.body.string() }.getOrNull().orEmpty().take(300)
         "HTTP ${resp.code}${if (body.isNotBlank()) ": $body" else ""}"
       }
       val detail = http ?: t.message ?: t.toString()
