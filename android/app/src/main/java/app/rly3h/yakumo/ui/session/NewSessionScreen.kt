@@ -6,7 +6,8 @@ import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.speech.tts.TextToSpeech
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +24,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
@@ -30,6 +32,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalIconToggleButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -39,10 +42,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,28 +51,22 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.viewmodel.compose.viewModel
 import app.rly3h.yakumo.R
-import app.rly3h.yakumo.data.LoggedUtterance
-import app.rly3h.yakumo.data.Models
-import app.rly3h.yakumo.data.SessionLog
-import app.rly3h.yakumo.data.SessionStore
 import app.rly3h.yakumo.data.OnlineProvider
 import app.rly3h.yakumo.data.Settings
-import app.rly3h.yakumo.translate.GeminiTranslator
-import app.rly3h.yakumo.translate.LiveTurn
-import app.rly3h.yakumo.translate.OfflineTranslator
-import app.rly3h.yakumo.translate.OpenAiTranslator
-import app.rly3h.yakumo.translate.SpeechTranslator
-import app.rly3h.yakumo.translate.TranslatorCallbacks
 
 @Composable
 fun NewSessionScreen(modifier: Modifier = Modifier) {
   val context = LocalContext.current
-  val scope = rememberCoroutineScope()
   val settings = remember { Settings(context) }
+  // Scoped to the Activity, not to this nav entry: the session (and its running
+  // engine) has to survive a trip through the drawer into Settings and back.
+  val activity = LocalActivity.current as ComponentActivity
+  val vm: NewSessionViewModel = viewModel(viewModelStoreOwner = activity)
 
-  val startedAt = remember { System.currentTimeMillis() }
-  val sessionId = remember { SessionStore.newId(startedAt) }
+  // Language settings can change while the user is away on the Settings screen.
+  LaunchedEffect(Unit) { vm.refresh() }
 
   var hasPermission by remember {
     mutableStateOf(
@@ -82,97 +77,19 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
   val permissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasPermission = it }
 
-  // OS TTS reads the translation aloud on the offline path (online plays the
-  // model's translated audio directly, so it never calls onSpeak).
-  val ttsRef = remember { mutableStateOf<TextToSpeech?>(null) }
-  DisposableEffect(Unit) {
-    val engine = TextToSpeech(context) { }
-    ttsRef.value = engine
-    onDispose { engine.stop(); engine.shutdown() }
-  }
-
-  val turns = remember { mutableStateListOf<LiveTurn>() } // chronological: newest last
-  var status by remember { mutableStateOf("Tap the mic and speak (EN or JA).") }
-  var partial by remember { mutableStateOf("") } // live transcript (streaming mode)
-  var recording by remember { mutableStateOf(false) }
-  var autoSpeak by remember { mutableStateOf(settings.autoSpeak) }
-  var online by remember { mutableStateOf(settings.onlineEnabled) }
-  // The user's own language is fixed (changed in Settings); the partner's language
-  // is chosen here, null meaning auto-detect. They collapse to the translator's
-  // LanguagePair at Start (see Conversation.toPair).
-  val mine = remember { settings.conversation().mine }
-  var partner by remember { mutableStateOf(settings.conversation().partner) }
   val listState = rememberLazyListState()
 
   val networkUp by rememberNetworkAvailable()
   // Online needs a key for the *selected* provider plus a network link.
   val canGoOnline = networkUp && settings.hasApiKey(settings.onlineProvider)
-  // Online needs a key + network; once either drops, fall back to offline.
-  LaunchedEffect(canGoOnline) { if (!canGoOnline) online = false }
-
-  // Active engine for the running session; null when idle. Held so stop() reaches it.
-  val translatorRef = remember { mutableStateOf<SpeechTranslator?>(null) }
+  // Online needs a key + network; once either drops, fall back to offline —
+  // without persisting, so the saved preference survives a dead spot.
+  LaunchedEffect(canGoOnline) { if (!canGoOnline) vm.forceOffline() }
 
   // Keep the newest content in view as turns (and the live partial) stream in.
-  LaunchedEffect(turns.size, partial) {
-    val last = turns.size - 1 + if (partial.isNotBlank()) 1 else 0
+  LaunchedEffect(vm.turns.size, vm.partial) {
+    val last = vm.turns.size - 1 + if (vm.partial.isNotBlank()) 1 else 0
     if (last >= 0) listState.animateScrollToItem(last)
-  }
-
-  fun persist() {
-    val done = turns.filter { it.translation != null } // already chronological
-    if (done.isEmpty()) return
-    SessionStore.save(
-      context,
-      SessionLog(
-        id = sessionId,
-        startedAt = startedAt,
-        utterances = done.map {
-          LoggedUtterance(it.transcript, it.srcLang, it.tgtLang, it.detected, it.translation!!)
-        },
-      ),
-    )
-  }
-
-  fun speak(text: String, tgt: String) {
-    if (!settings.autoSpeak) return
-    ttsRef.value?.let { engine ->
-      val avail = engine.setLanguage(localeFromFlores(tgt))
-      if (avail != TextToSpeech.LANG_MISSING_DATA && avail != TextToSpeech.LANG_NOT_SUPPORTED) {
-        engine.setSpeechRate(settings.speechRate)
-        engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "turn")
-      }
-    }
-  }
-
-  // Bridges an engine's events onto this screen's state. Compose snapshot state is
-  // thread-safe to mutate, so engines may invoke these from background threads.
-  val callbacks = remember {
-    object : TranslatorCallbacks {
-      override fun onTurnStart(turn: LiveTurn) { turns.add(turn) }
-
-      override fun onTurnUpdate(id: Long, transcript: String?, translation: String?) {
-        val idx = turns.indexOfFirst { it.id == id }
-        if (idx < 0) return
-        turns[idx] = turns[idx].copy(
-          transcript = transcript ?: turns[idx].transcript,
-          translation = translation ?: turns[idx].translation,
-        )
-      }
-
-      override fun onPartial(text: String) { partial = text }
-      override fun onStatus(text: String) { status = text }
-      override fun onSpeak(text: String, tgtFlores: String) { speak(text, tgtFlores) }
-      override fun onPersist() { persist() }
-
-      override fun onFinished(error: String?) {
-        recording = false
-        partial = ""
-        translatorRef.value = null
-        status = error?.let { "Error: $it" }
-          ?: "Stopped. (${turns.size} turn${if (turns.size == 1) "" else "s"})"
-      }
-    }
   }
 
   fun start() {
@@ -180,83 +97,55 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
       permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
       return
     }
-    // Snapshot the engine choice for the whole session — switching mid-session
-    // isn't supported (mirrors the streamingAsr capture-once rule).
-    val useOnline = online && canGoOnline
-    val streamingAsr = settings.streamingAsr
-    if (!useOnline && streamingAsr && !Models.isPresent(context, "asr_stream")) {
-      status = "Streaming model missing — download it in Settings → Experimental."
-      return
-    }
-    // Direction is always auto-detected per utterance; the partner choice only
-    // resolves which language sits opposite the user.
-    val pair = Conversation(mine, partner).toPair()
-    val translator: SpeechTranslator = when {
-      useOnline && settings.onlineProvider == OnlineProvider.GEMINI ->
-        GeminiTranslator(context, settings, pair, InputMode.AUTO)
-      useOnline -> OpenAiTranslator(context, settings, pair, InputMode.AUTO)
-      else -> OfflineTranslator(context, settings, pair, InputMode.AUTO, streamingAsr)
-    }
-    translatorRef.value = translator
-    recording = true
-    status = when {
-      useOnline -> "Connecting…"
-      streamingAsr -> "Listening (streaming EN)…"
-      else -> "Listening… speak, then tap Stop."
-    }
-    translator.start(scope, callbacks)
-  }
-
-  fun stop() {
-    translatorRef.value?.stop()
-    status = "Finishing…"
+    vm.start(canGoOnline)
   }
 
   Column(modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     // Top bar: the partner-language control (the only language you pick here) on
-    // the left; engine + speak toggles on the right. Your own language is fixed in
-    // Settings and shown only as a quiet caption below.
+    // the left; new-session + engine toggles on the right. Your own language is
+    // fixed in Settings and shown only as a quiet caption below.
     Row(
       Modifier.fillMaxWidth().padding(top = 8.dp),
       horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically,
     ) {
       PartnerPicker(
-        mine = mine,
-        partner = partner,
-        enabled = !recording,
-        onChange = {
-          partner = it
-          settings.partnerFlores = it?.flores
-        },
+        mine = vm.mine,
+        partner = vm.partner,
+        enabled = !vm.recording,
+        onChange = vm::onPartnerChange,
       )
-      // Online/Offline engine toggle. Enabled only with a key + network, and
-      // never mid-session (the engine is captured at Start). The speak toggle lives
-      // down by the mic, next to the control it affects.
-      FilledTonalIconToggleButton(
-        checked = online,
-        enabled = canGoOnline && !recording,
-        onCheckedChange = {
-          online = it
-          settings.onlineEnabled = it
-        },
-      ) {
-        Icon(
-          painterResource(if (online) R.drawable.ic_cloud else R.drawable.ic_cloud_off),
-          contentDescription = if (online) "Online mode" else "Offline mode",
-        )
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        // The session now outlives navigation, so starting a fresh one is an
+        // explicit act rather than a side effect of leaving the screen.
+        IconButton(onClick = vm::reset, enabled = !vm.recording && vm.turns.isNotEmpty()) {
+          Icon(Icons.Filled.Add, contentDescription = "Start a new session")
+        }
+        // Online/Offline engine toggle. Enabled only with a key + network, and
+        // never mid-session (the engine is captured at Start). The speak toggle
+        // lives down by the mic, next to the control it affects.
+        FilledTonalIconToggleButton(
+          checked = vm.online,
+          enabled = canGoOnline && !vm.recording,
+          onCheckedChange = vm::onOnlineChange,
+        ) {
+          Icon(
+            painterResource(if (vm.online) R.drawable.ic_cloud else R.drawable.ic_cloud_off),
+            contentDescription = if (vm.online) "Online mode" else "Offline mode",
+          )
+        }
       }
     }
 
     // Which language is "yours" — fixed; changed in Settings, not mid-conversation.
     Text(
-      "You: ${mine.label}",
+      "You: ${vm.mine.label}",
       style = MaterialTheme.typography.labelSmall,
       color = MaterialTheme.colorScheme.outline,
     )
 
     // Why the Online toggle is unavailable (only when the user might expect it).
-    if (!recording && !canGoOnline) {
+    if (!vm.recording && !canGoOnline) {
       val providerName = when (settings.onlineProvider) {
         OnlineProvider.OPENAI -> "OpenAI"
         OnlineProvider.GEMINI -> "Gemini"
@@ -276,7 +165,7 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
     // live partial transcript rides along as a trailing entry so it never
     // overlaps the controls below.
     Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-      if (turns.isEmpty() && partial.isBlank()) {
+      if (vm.turns.isEmpty() && vm.partial.isBlank()) {
         Text(
           "Tap the mic and start speaking.",
           style = MaterialTheme.typography.bodyMedium,
@@ -288,9 +177,9 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
           modifier = Modifier.fillMaxSize(),
           verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-          items(turns, key = { it.id }) { t -> TurnCard(t.transcript, t.srcLang, t.tgtLang, t.translation) }
-          if (partial.isNotBlank()) {
-            item(key = "partial") { PartialTurn(partial) }
+          items(vm.turns, key = { it.id }) { t -> TurnCard(t.transcript, t.srcLang, t.tgtLang, t.translation) }
+          if (vm.partial.isNotBlank()) {
+            item(key = "partial") { PartialTurn(vm.partial) }
           }
         }
       }
@@ -302,38 +191,32 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      Text(status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+      Text(vm.status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
       Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         // Mirror the speak toggle's footprint on the left so the mic stays centered.
         Spacer(Modifier.size(48.dp))
         Spacer(Modifier.weight(1f))
         Surface(
-          onClick = { if (recording) stop() else start() },
+          onClick = { if (vm.recording) vm.stop() else start() },
           shape = CircleShape,
-          color = if (recording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+          color = if (vm.recording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
           modifier = Modifier.size(72.dp),
         ) {
           Box(contentAlignment = Alignment.Center) {
             Icon(
-              painterResource(if (recording) R.drawable.ic_stop else R.drawable.ic_mic),
-              contentDescription = if (recording) "Stop" else "Start recording",
+              painterResource(if (vm.recording) R.drawable.ic_stop else R.drawable.ic_mic),
+              contentDescription = if (vm.recording) "Stop" else "Start recording",
               modifier = Modifier.size(32.dp),
-              tint = if (recording) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary,
+              tint = if (vm.recording) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary,
             )
           }
         }
         Spacer(Modifier.weight(1f))
         // Speak-aloud toggle, beside the mic it relates to.
-        IconToggleButton(
-          checked = autoSpeak,
-          onCheckedChange = {
-            autoSpeak = it
-            settings.autoSpeak = it
-          },
-        ) {
+        IconToggleButton(checked = vm.autoSpeak, onCheckedChange = vm::onAutoSpeakChange) {
           Icon(
-            painterResource(if (autoSpeak) R.drawable.ic_volume_up else R.drawable.ic_volume_off),
-            contentDescription = if (autoSpeak) "Speak translations aloud" else "Translations muted",
+            painterResource(if (vm.autoSpeak) R.drawable.ic_volume_up else R.drawable.ic_volume_off),
+            contentDescription = if (vm.autoSpeak) "Speak translations aloud" else "Translations muted",
           )
         }
       }
