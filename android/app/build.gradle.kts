@@ -41,6 +41,11 @@ fun signingValue(propKey: String, envKey: String): String? =
   (keystoreProps.getProperty(propKey) ?: System.getenv(envKey))?.takeIf { it.isNotBlank() }
 val releaseStorePath = signingValue("storeFile", "YAKUMO_KEYSTORE_FILE")
 
+// The ABIs the Rust core and the sherpa prebuilts are produced for. Declared
+// here so the packaging filter below and the native build tasks further down
+// cannot drift apart.
+val androidAbis = listOf("arm64-v8a", "x86_64")
+
 android {
     namespace = "app.rly3h.yakumo"
     // AndroidX 2026.08 (core-ktx 1.19, compose-ui 1.12) requires compiling
@@ -54,6 +59,12 @@ android {
         versionCode = 4
         versionName = "0.4.0"
         buildConfigField("String", "GIT_HASH", "\"${gitHash()}\"")
+
+        // Without this the JNA aar drags libjnidispatch.so in for every ABI it
+        // ships. Those stubs are enough for an armeabi-v7a/x86 device to accept
+        // the install, and the app then dies on the first call into a core that
+        // was never built for it.
+        ndk { abiFilters += androidAbis }
     }
 
     signingConfigs {
@@ -112,7 +123,6 @@ kotlin {
 // x86_64-linux-android); see docs/architecture.md §8.
 val rustCoreDir = rootDir.parentFile.resolve("rust/core")
 val jniLibsDir = layout.projectDirectory.dir("src/main/jniLibs")
-val androidAbis = listOf("arm64-v8a", "x86_64")
 
 val cargoBuildRustCore = tasks.register<Exec>("cargoBuildRustCore") {
     group = "build"
