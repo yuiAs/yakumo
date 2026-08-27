@@ -32,7 +32,7 @@ class ModelCancelled : Exception("download cancelled")
  * First-run model provisioning: reads assets/models.json and downloads each
  * model into internal storage (filesDir). Replaces the old adb-push workflow.
  * Internal storage is required because the NDK's raw open() is denied on
- * external Android/data on some OEMs (see docs/architecture.md §12).
+ * external Android/data on some OEMs (see docs/architecture.md §6).
  */
 object Models {
   private val json = Json { ignoreUnknownKeys = true }

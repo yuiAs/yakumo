@@ -93,6 +93,9 @@ Native libs (jniLibs/)         sherpa-onnx + onnxruntime, libtranslatecore.so
 - **Translation** runs NLLB ONNX via the `ort` crate, which `dlopen`s the
   `libonnxruntime.so` already bundled with sherpa-onnx.
 
+The full picture — engine abstraction, VAD/endpoint knobs, model provisioning,
+and the FFI conventions — is in [docs/architecture.md](docs/architecture.md).
+
 ## Models
 
 Models are **not** bundled in the APK. They are downloaded on first use from the
