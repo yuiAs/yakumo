@@ -8,7 +8,7 @@ buildscript {
   repositories { mavenCentral() }
   // Reused by the fetchSherpaPrebuilt task to extract the release tar.bz2,
   // mirroring the in-app extraction (same library, same version).
-  dependencies { classpath("org.apache.commons:commons-compress:1.27.1") }
+  dependencies { classpath("org.apache.commons:commons-compress:1.28.0") }
 }
 
 plugins {
@@ -43,7 +43,10 @@ val releaseStorePath = signingValue("storeFile", "YAKUMO_KEYSTORE_FILE")
 
 android {
     namespace = "app.rly3h.yakumo"
-    compileSdk = 36
+    // AndroidX 2026.08 (core-ktx 1.19, compose-ui 1.12) requires compiling
+    // against 37. targetSdk stays at 36 so no runtime behavior changes ride
+    // along with the dependency bump.
+    compileSdk = 37
     defaultConfig {
         applicationId = "app.rly3h.yakumo"
         minSdk = 24
@@ -258,11 +261,11 @@ dependencies {
   implementation(libs.androidx.lifecycle.viewmodel.navigation3)
 
   // Rust core (UniFFI): generated Kotlin bindings call into libtranslatecore.so via JNA.
-  implementation("net.java.dev.jna:jna:5.14.0@aar")
+  implementation("net.java.dev.jna:jna:5.19.1@aar")
 
   // Model provisioning: parse the JSON manifest + extract tar.bz2 archives in-app.
-  implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
-  implementation("org.apache.commons:commons-compress:1.27.1")
+  implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+  implementation("org.apache.commons:commons-compress:1.28.0")
 
   // Online mode (OpenAI Realtime): WebSocket transport + on-device API-key encryption.
   implementation(libs.okhttp)
