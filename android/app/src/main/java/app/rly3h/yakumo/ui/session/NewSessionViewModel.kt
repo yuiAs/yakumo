@@ -13,6 +13,7 @@ import app.rly3h.yakumo.data.Models
 import app.rly3h.yakumo.data.OnlineProvider
 import app.rly3h.yakumo.data.SessionLog
 import app.rly3h.yakumo.data.SessionStore
+import app.rly3h.yakumo.RecordingService
 import app.rly3h.yakumo.data.Settings
 import app.rly3h.yakumo.translate.GeminiTranslator
 import app.rly3h.yakumo.translate.LiveTurn
@@ -133,6 +134,10 @@ internal class NewSessionViewModel(app: Application) : AndroidViewModel(app) {
     }
     translator = engine
     recording = true
+    // Started while the screen is visible, which is what API 34+ requires of a
+    // microphone-typed foreground service.
+    RecordingService.onStopRequested = ::stop
+    RecordingService.start(app)
     status = when {
       useOnline -> "Connecting…"
       streamingAsr -> "Listening (streaming EN)…"
@@ -150,8 +155,14 @@ internal class NewSessionViewModel(app: Application) : AndroidViewModel(app) {
   override fun onCleared() {
     translator?.stop()
     translator = null
+    releaseService()
     tts?.let { it.stop(); it.shutdown() }
     tts = null
+  }
+
+  private fun releaseService() {
+    RecordingService.onStopRequested = null
+    RecordingService.stop(getApplication())
   }
 
   private fun persist() {
@@ -202,6 +213,7 @@ internal class NewSessionViewModel(app: Application) : AndroidViewModel(app) {
       recording = false
       partial = ""
       translator = null
+      releaseService()
       status = error?.let { "Error: $it" }
         ?: "Stopped. (${turns.size} turn${if (turns.size == 1) "" else "s"})"
     }

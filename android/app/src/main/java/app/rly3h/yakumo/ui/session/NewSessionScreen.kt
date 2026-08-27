@@ -1,6 +1,7 @@
 package app.rly3h.yakumo.ui.session
 
 import android.Manifest
+import android.os.Build
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
@@ -74,8 +75,21 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
         PackageManager.PERMISSION_GRANTED
     )
   }
+  // POST_NOTIFICATIONS rides along on 33+: the recording service runs without
+  // it, but its notification (and its Stop button) would be invisible. Only
+  // RECORD_AUDIO gates recording.
+  val requested = remember {
+    buildList {
+      add(Manifest.permission.RECORD_AUDIO)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        add(Manifest.permission.POST_NOTIFICATIONS)
+      }
+    }.toTypedArray()
+  }
   val permissionLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasPermission = it }
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+      hasPermission = granted[Manifest.permission.RECORD_AUDIO] == true
+    }
 
   val listState = rememberLazyListState()
 
@@ -94,7 +108,7 @@ fun NewSessionScreen(modifier: Modifier = Modifier) {
 
   fun start() {
     if (!hasPermission) {
-      permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+      permissionLauncher.launch(requested)
       return
     }
     vm.start(canGoOnline)
