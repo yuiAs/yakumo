@@ -14,7 +14,7 @@ kotlin = "2.4.10"
 nav3Core = "1.1.7"
 lifecycleViewmodelNav3 = "2.11.0"
 okhttp = "5.5.0"
-tink = "1.18.0"
+tink = "1.23.0"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidxCore" }
