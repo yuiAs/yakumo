@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Needed on top of the debug values/ override: a locale-qualified string in
+         main/res/values-ja would otherwise win on a Japanese device and drop the
+         "(debug)" marker. -->
+    <string name="app_name">やくも (debug)</string>
+</resources>

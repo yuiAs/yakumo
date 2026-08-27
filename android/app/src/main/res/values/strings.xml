@@ -1,3 +1,4 @@
 <resources>
-    <string name="app_name">やくも</string>
+    <!-- Default (non-Japanese) locales get the romanized name; see values-ja. -->
+    <string name="app_name">Yakumo</string>
 </resources>

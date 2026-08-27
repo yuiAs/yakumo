@@ -29,12 +29,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.layout.Row
 import app.rly3h.yakumo.BuildConfig
+import app.rly3h.yakumo.R
 import app.rly3h.yakumo.translate.GeminiLive
 import app.rly3h.yakumo.translate.OpenAiRealtime
 import app.rly3h.yakumo.data.ModelCancelled
@@ -422,9 +424,10 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     // Tight inner spacing keeps the version block together; the parent Column's
     // 12.dp gap would otherwise scatter these one-line entries.
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+      val appName = stringResource(R.string.app_name)
       Text(
-        remember {
-          "やくも v${BuildConfig.VERSION_NAME} (${BuildConfig.GIT_HASH}) / " +
+        remember(appName) {
+          "$appName v${BuildConfig.VERSION_NAME} (${BuildConfig.GIT_HASH}) / " +
             "${coreVersion()} / ${sherpaVersion()}"
         },
         style = MaterialTheme.typography.bodySmall,

@@ -21,6 +21,7 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
@@ -52,7 +53,7 @@ fun MainNavigation() {
     drawerContent = {
       ModalDrawerSheet {
         Text(
-          "やくも",
+          stringResource(R.string.app_name),
           modifier = Modifier.padding(16.dp),
           style = MaterialTheme.typography.titleLarge,
         )

@@ -2,5 +2,5 @@
 <resources>
     <!-- Debug builds carry the .debug applicationId so they sit beside a release
          install; a distinct label keeps the two apart in the launcher. -->
-    <string name="app_name">やくも (debug)</string>
+    <string name="app_name">Yakumo (debug)</string>
 </resources>
